@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Control de Expedientes & QR - CREDIBAN V20.1 Cloud</title>
+    <title>Control de Expedientes & QR - CREDIBAN V21 Cloud</title>
     
     <!-- Librerías Core -->
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -12,11 +12,11 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     
-    <!-- Librerías para PDF Nativo (Exclusivo Gerencia) -->
+    <!-- Librerías para PDF Nativo (Reportes y Hojas A4 de Tickets QR Exactos) -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
 
-    <!-- Librerías Estables para Escáner QR por Hardware y Generador QR HD -->
+    <!-- Librerías para Escáner QR por Hardware y Generador QR HD -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js"></script>
     
@@ -28,30 +28,43 @@
         ::-webkit-scrollbar { width: 6px; height: 6px; }
         ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-        .animate-fade-in { animation: fadeIn 0.25s ease-out forwards; }
-        .modal-bg { animation: fadeIn 0.2s ease-out forwards; }
+        .animate-fade-in { animation: fadeIn 0.22s ease-out forwards; }
+        .modal-bg { animation: fadeIn 0.18s ease-out forwards; }
         
         .login-bg { background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); position: relative; overflow: hidden; }
         .login-bg::before { content: ''; position: absolute; top: -50%; left: -50%; width: 200%; height: 200%; background: radial-gradient(circle, rgba(89,180,71,0.05) 0%, rgba(0,0,0,0) 70%); }
 
-        /* Asegurar que el video del escáner ocupe bien el contenedor móvil */
         #qr-reader-box video {
             width: 100% !important;
             border-radius: 12px !important;
             object-fit: cover !important;
         }
 
-        /* IMPRESIÓN EXACTA 4x6 (24 Tickets QR por Hoja A4) */
+        /* Vista previa WYSIWYG exacta a la hoja A4 (Evita que las palabras se partan al imprimir) */
+        .print-area {
+            width: 210mm !important;
+            min-width: 210mm !important;
+            max-width: 210mm !important;
+            box-sizing: border-box !important;
+        }
+        .ticket-name-text {
+            word-break: normal !important;
+            overflow-wrap: normal !important;
+            hyphens: none !important;
+        }
+
         @media print {
+            @page { size: A4 portrait; margin: 4mm; }
             html, body, #root, main { 
                 height: auto !important; min-height: 0 !important; overflow: visible !important; 
                 display: block !important; background: white !important; margin: 0 !important; padding: 0 !important;
             }
             .no-print { display: none !important; }
-            .print-container { padding-left: 2px !important; padding-top: 2px !important; }
+            .print-container { padding: 0 !important; margin: 0 !important; overflow: visible !important; }
             .print-area { 
-                margin: 0 auto !important; width: 210mm !important; border-left: 2px solid black !important;
-                border-top: 2px solid black !important; box-shadow: none !important; page-break-after: always; box-sizing: border-box !important;
+                margin: 0 auto !important; width: 200mm !important; min-width: 200mm !important; max-width: 200mm !important;
+                border-left: 2px solid black !important; border-top: 2px solid black !important;
+                box-shadow: none !important; page-break-after: always; box-sizing: border-box !important;
             }
             .text-red-600 { color: #dc2626 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
             .ticket-cell { page-break-inside: avoid; }
@@ -63,113 +76,181 @@
 
     <script type="text/babel">
         // =========================================================================
-        // 1. URL DEL SCRIPT DE BASE DE DATOS DE EXPEDIENTES (V20)
+        // 1. URL DEL SCRIPT DE BASE DE DATOS DE EXPEDIENTES
         // =========================================================================
         const API_URL = "https://script.google.com/macros/s/AKfycbwHEPrFeiFPsB0z1SsTeO2KKfXoSVcZsjxLbQ_UjREyTEI28edgnZDLGnTB0Z7PqTRs/exec";
 
         // =========================================================================
-        // 2. URL OFICIAL DEL SCRIPT MAESTRO DE USUARIOS
+        // 2. MOTOR DE AUDIO POTENTE: CAJA REGISTRADORA FUERTE + SIRENA DE ERROR
         // =========================================================================
-        const USERS_API_URL = "https://script.google.com/macros/s/AKfycbyPGo-OSC0KZcz03bAMpKQ82cipc2T1LNztaI229FhYqqNNXqG1oSb6hPPgVSSU3piqiw/exec";
+        let sharedAudioCtx = null;
+        const getAudioContext = () => {
+            if (!sharedAudioCtx) {
+                sharedAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (sharedAudioCtx.state === 'suspended') {
+                sharedAudioCtx.resume();
+            }
+            return sharedAudioCtx;
+        };
 
-        // Sintetizador Nativo de Sonidos en 0 ms (Estilo Caja Supermercado)
         const playSound = (type) => {
             try {
-                const ctx = new (window.AudioContext || window.webkitAudioContext)();
-                const playTone = (freq, start, duration, wave = 'sine') => {
-                    const osc = ctx.createOscillator();
-                    const gain = ctx.createGain();
-                    osc.type = wave;
-                    osc.frequency.setValueAtTime(freq, ctx.currentTime + start);
-                    gain.gain.setValueAtTime(0.28, ctx.currentTime + start);
-                    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + start + duration);
-                    osc.connect(gain);
-                    gain.connect(ctx.destination);
-                    osc.start(ctx.currentTime + start);
-                    osc.stop(ctx.currentTime + start + duration);
+                const ctx = getAudioContext();
+                const compressor = ctx.createDynamicsCompressor();
+                compressor.threshold.setValueAtTime(-12, ctx.currentTime);
+                compressor.knee.setValueAtTime(10, ctx.currentTime);
+                compressor.ratio.setValueAtTime(12, ctx.currentTime);
+                compressor.connect(ctx.destination);
+
+                const playDualTone = (f1, f2, start, duration, wave = 'square', vol = 0.95) => {
+                    [f1, f2].forEach(freq => {
+                        const osc = ctx.createOscillator();
+                        const gain = ctx.createGain();
+                        osc.type = wave;
+                        osc.frequency.setValueAtTime(freq, ctx.currentTime + start);
+                        gain.gain.setValueAtTime(vol, ctx.currentTime + start);
+                        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + start + duration);
+                        osc.connect(gain);
+                        gain.connect(compressor);
+                        osc.start(ctx.currentTime + start);
+                        osc.stop(ctx.currentTime + start + duration);
+                    });
                 };
 
                 if (type === 'beep') {
-                    playTone(1850, 0, 0.09, 'square');
+                    // Sonido potente de Caja Registradora ("¡Clin-Beep!" metálico fuerte)
+                    playDualTone(2100, 2750, 0, 0.06, 'square', 0.95);
+                    playDualTone(2650, 3300, 0.06, 0.14, 'triangle', 0.98);
+                    if (navigator.vibrate) navigator.vibrate(45);
                 } else if (type === 'duplicate') {
-                    playTone(420, 0, 0.12, 'sawtooth');
-                    playTone(350, 0.15, 0.18, 'sawtooth');
+                    // Doble bocina ámbar de "Ya contabilizado"
+                    playDualTone(520, 680, 0, 0.16, 'sawtooth', 0.95);
+                    playDualTone(420, 560, 0.20, 0.22, 'sawtooth', 0.95);
+                    if (navigator.vibrate) navigator.vibrate([120, 60, 120]);
                 } else if (type === 'alert') {
-                    playTone(220, 0, 0.25, 'sawtooth');
-                    playTone(180, 0.28, 0.35, 'sawtooth');
+                    // Alarma fuerte de ERROR (No existe / Mora Dura / Lista Negra)
+                    playDualTone(260, 310, 0, 0.25, 'sawtooth', 0.98);
+                    playDualTone(190, 240, 0.28, 0.38, 'sawtooth', 0.98);
+                    if (navigator.vibrate) navigator.vibrate([250, 80, 250]);
                 }
             } catch (e) {}
         };
 
-        // Clasificador Estricto de Roles (Solo permite CAJERO, ADMINISTRADOR y GERENTE)
-        const clasificarRolSistema = (cargoRaw) => {
-            const c = String(cargoRaw || "")
-                .normalize("NFD")
-                .replace(/[\u0300-\u036f]/g, "")
-                .toUpperCase()
-                .trim();
+        // =========================================================================
+        // 3. NORMALIZADOR DUAL DE EXPEDIENTES (RECONOCE "7" Y "001-00007" POR IGUAL)
+        // =========================================================================
+        const normalizarIdNatural = (raw) => {
+            const str = String(raw || '').trim().toUpperCase();
+            if (!str) return '';
+            const parteFinal = str.includes('-') ? str.split('-').pop() : str;
+            const soloNum = parteFinal.replace(/\D/g, '');
+            if (!soloNum) return str;
+            return String(parseInt(soloNum, 10)); // "001-00007" -> "7" y "7" -> "7"
+        };
 
-            if (c.includes("ASESOR") || c.includes("ANALISTA") || c.includes("PROMOTOR") || c === "TRABAJADOR") {
-                return "BLOQUEADO_ASESOR";
-            }
-            if (c.includes("GERENTE") || c.includes("GERENCIA") || c.includes("DIRECTOR") || c.includes("SUPERADMIN")) {
-                return "GERENTE";
-            }
-            if (c.includes("ADMIN") || c.includes("SUPERVISOR") || c.includes("JEFE") || c.includes("COORDINADOR")) {
-                return "ADMINISTRADOR";
-            }
-            if (c.includes("CAJERO") || c.includes("CAJERA") || c.includes("CAJA") || c.includes("ARCHIVO")) {
-                return "CAJERO";
-            }
+        const formatearConCeros = (raw) => {
+            const nat = normalizarIdNatural(raw);
+            const soloNum = nat.replace(/\D/g, '');
+            return soloNum ? "001-" + soloNum.padStart(5, '0') : '';
+        };
+
+        // Calcula el tamaño de letra ideal para que NINGÚN apellido largo se corte en 50mm
+        const calcularFontSizeOptimo = (nombreCompleto, manualSize, qrPos) => {
+            if (manualSize > 0) return manualSize;
+            const palabras = String(nombreCompleto || '').trim().split(/\s+/);
+            const maxPalabra = palabras.reduce((max, p) => Math.max(max, p.length), 0);
+            const totalLen = String(nombreCompleto || '').length;
+
+            if (qrPos === 'ARRIBA') return totalLen > 24 ? 8.5 : 10;
+            if (maxPalabra >= 12 || totalLen >= 30) return 8.5;
+            if (maxPalabra >= 10 || totalLen >= 22) return 9.5;
+            if (maxPalabra >= 8 || totalLen >= 16) return 10.5;
+            return 11.5;
+        };
+
+        const dividirEnLineasSeguras = (nombreCompleto, maxCharsPorLinea = 12) => {
+            const palabras = String(nombreCompleto || '').trim().split(/\s+/).filter(Boolean);
+            const lineas = [];
+            let actual = '';
+            palabras.forEach(p => {
+                if (!actual) {
+                    actual = p;
+                } else if ((actual.length + 1 + p.length) <= maxCharsPorLinea) {
+                    actual += ' ' + p;
+                } else {
+                    lineas.push(actual);
+                    actual = p;
+                }
+            });
+            if (actual) lineas.push(actual);
+            return lineas.slice(0, 4);
+        };
+
+        // Clasificador Estricto de Roles
+        const clasificarRolSistema = (cargoRaw) => {
+            const c = String(cargoRaw || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().trim();
+            if (c.includes("ASESOR") || c.includes("ANALISTA") || c.includes("PROMOTOR") || c === "TRABAJADOR") return "BLOQUEADO_ASESOR";
+            if (c.includes("GERENTE") || c.includes("GERENCIA") || c.includes("DIRECTOR") || c.includes("SUPERADMIN")) return "GERENTE";
+            if (c.includes("ADMIN") || c.includes("SUPERVISOR") || c.includes("JEFE") || c.includes("COORDINADOR")) return "ADMINISTRADOR";
+            if (c.includes("CAJERO") || c.includes("CAJERA") || c.includes("CAJA") || c.includes("ARCHIVO")) return "CAJERO";
             return "NO_AUTORIZADO";
         };
 
-        // Generador de Código QR en Alta Definición (3x DPI) con Zona de Silencio Blanca Obligatoria
-        function QRCodeCanvas({ value, size = 84 }) {
+        // Componente QR HD
+        function QRCodeCanvas({ value, size = 72 }) {
             const canvasRef = React.useRef(null);
             React.useEffect(() => {
                 if (canvasRef.current && window.QRious) {
-                    const hdSize = Math.max(240, size * 3); // Renderizado nítido para impresión
+                    const hdSize = Math.max(240, size * 3);
                     new window.QRious({
                         element: canvasRef.current,
                         value: value || '001-00000',
                         size: hdSize,
-                        level: 'L', // Nivel L genera bloques más grandes y fáciles de leer rápido con cámara
+                        level: 'L',
                         background: '#ffffff',
                         foreground: '#000000',
-                        padding: Math.round(hdSize * 0.08) // Margen blanco interno (Quiet Zone) indispensable para el lector
+                        padding: Math.round(hdSize * 0.08)
                     });
                 }
             }, [value, size]);
             return (
-                <div className="bg-white inline-flex items-center justify-center rounded-sm" style={{ width: `${size}px`, height: `${size}px` }}>
-                    <canvas
-                        ref={canvasRef}
-                        style={{
-                            width: `${size}px`,
-                            height: `${size}px`,
-                            imageRendering: 'pixelated'
-                        }}
-                    />
+                <div className="bg-white inline-flex items-center justify-center shrink-0" style={{ width: `${size}px`, height: `${size}px` }}>
+                    <canvas ref={canvasRef} style={{ width: `${size}px`, height: `${size}px`, imageRendering: 'pixelated' }} />
                 </div>
+            );
+        }
+
+        // Botón de Ayuda (i) para Tutoriales de Nuevos Usuarios
+        function HelpButton({ title, steps, onOpen }) {
+            return (
+                <button
+                    type="button"
+                    onClick={() => onOpen({ title, steps })}
+                    title="Ver guía paso a paso"
+                    className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-blue-100 text-blue-700 hover:bg-blue-600 hover:text-white text-[11px] font-black transition-colors ml-1.5 shadow-sm"
+                >
+                    <i className="fa-solid fa-info"></i>
+                </button>
             );
         }
 
         function App() {
             // =====================================================================
-            // ESTADOS DE SEGURIDAD, LOGIN Y RECORDAR CONTRASEÑA
+            // ESTADOS DE SEGURIDAD Y ACCESO
             // =====================================================================
             const [isAuth, setIsAuth] = React.useState(false);
             const [isLoading, setIsLoading] = React.useState(false);
             const [loadingMsg, setLoadingMsg] = React.useState('');
             const [loginErrorMsg, setLoginErrorMsg] = React.useState('');
+            const [helpModal, setHelpModal] = React.useState(null);
 
-            const [rememberPass, setRememberPass] = React.useState(() => localStorage.getItem('crediban_v20_remember') !== 'false');
+            const [rememberPass, setRememberPass] = React.useState(() => localStorage.getItem('crediban_v21_remember') !== 'false');
             const [showPassLogin, setShowPassLogin] = React.useState(false);
-            const [usuarioInput, setUsuarioInput] = React.useState(() => localStorage.getItem('crediban_v20_user') || '');
+            const [usuarioInput, setUsuarioInput] = React.useState(() => localStorage.getItem('crediban_v21_user') || '');
             const [passwordInput, setPasswordInput] = React.useState(() => {
-                return localStorage.getItem('crediban_v20_remember') !== 'false'
-                    ? (localStorage.getItem('crediban_v20_pass') || '')
+                return localStorage.getItem('crediban_v21_remember') !== 'false'
+                    ? (localStorage.getItem('crediban_v21_pass') || '')
                     : '';
             });
 
@@ -177,12 +258,10 @@
             const [estadosDisponibles, setEstadosDisponibles] = React.useState(["ACTIVO", "MORA DURA", "CANCELADO", "LISTA NEGRA", "JUDICIAL", "REPROGRAMADO"]);
             const [ubicacionesDisponibles, setUbicacionesDisponibles] = React.useState(["CAJA (ARCHIVO)", "EN COMITÉ", "AUDITORÍA", "ARCHIVO CENTRAL"]);
 
-            const [sedeActual, setSedeActual] = React.useState(() => localStorage.getItem('crediban_v20_sede') || 'HUACHO');
+            const [sedeActual, setSedeActual] = React.useState(() => localStorage.getItem('crediban_v21_sede') || 'HUACHO');
             const [operadorNombre, setOperadorNombre] = React.useState('');
-            const [rolSistema, setRolSistema] = React.useState(''); // 'CAJERO' | 'ADMINISTRADOR' | 'GERENTE'
-            const [sedesPermitidas, setSedesPermitidas] = React.useState([]);
+            const [rolSistema, setRolSistema] = React.useState('');
 
-            // Permisos según el Rol
             const esGerente = rolSistema === 'GERENTE';
             const esAdmin = rolSistema === 'ADMINISTRADOR';
             const esCajero = rolSistema === 'CAJERO';
@@ -190,39 +269,35 @@
             const puedeExportar = esGerente;
             const puedeEditarBase = esGerente;
 
-            // ESTADOS DE NAVEGACIÓN Y DATOS
             const [view, setView] = React.useState('dashboard');
             const [asesores, setAsesores] = React.useState([]);
             const [expedientes, setExpedientes] = React.useState([]);
             const [ticketsQueue, setTicketsQueue] = React.useState(() => JSON.parse(localStorage.getItem('crediban_tickets_queue')) || []);
 
-            // =====================================================================
-            // CONFIGURACIÓN PERSONALIZABLE DE IMPRESIÓN DE TICKETS Y QR
-            // =====================================================================
+            // CONFIGURACIÓN DE IMPRESIÓN A4
             const [printConfig, setPrintConfig] = React.useState(() => {
-                const saved = localStorage.getItem('crediban_v20_print_cfg');
+                const saved = localStorage.getItem('crediban_v21_print_cfg');
                 if (saved) {
                     try { return JSON.parse(saved); } catch (e) {}
                 }
                 return {
-                    qrSize: 84,                 // Tamaño del QR en px (55 a 115)
-                    qrPosition: 'DERECHA',      // 'DERECHA' | 'IZQUIERDA' | 'ARRIBA' | 'GIGANTE'
-                    qrDataMode: 'COMPACTO',     // 'COMPACTO' (Sede|ID) | 'MINIMO' (Solo ID) | 'COMPLETO' (Sede|ID|Cliente)
-                    fontSizeCliente: 0,         // 0 = Automático inteligente, o valor fijo (10 a 22 px)
-                    fontSizeCodigo: 26,         // Tamaño del código rojo inferior (18 a 36 px)
-                    ticketHeightMm: 40,         // Altura de cada celda en mm (35 a 50 mm)
-                    showHeaderSede: true        // Mostrar/ocultar barra superior de sede
+                    qrSize: 70,                 // 70px cabe perfecto en celda de 52mm dejando 115px para el nombre
+                    qrPosition: 'IZQUIERDA',    // Como en tu Imagen 1: QR a la izquierda y nombre a la derecha
+                    qrDataMode: 'COMPACTO',     // Sede + Código
+                    formatoCodigoRojo: 'CEROS', // 'CEROS' (001-00007) | 'NATURAL' (7)
+                    fontSizeCliente: 0,         // 0 = Auto sin cortar palabras
+                    fontSizeCodigo: 24,
+                    ticketHeightMm: 40,
+                    showHeaderSede: true
                 };
             });
 
             React.useEffect(() => {
-                localStorage.setItem('crediban_v20_print_cfg', JSON.stringify(printConfig));
+                localStorage.setItem('crediban_v21_print_cfg', JSON.stringify(printConfig));
             }, [printConfig]);
 
-            // =====================================================================
-            // ESTADOS Y REFS DEL ESCÁNER QR RÁFAGA (SIN REINICIOS DE CÁMARA)
-            // =====================================================================
-            const [scanMode, setScanMode] = React.useState('INVENTARIO'); // 'INVENTARIO' | 'RETORNO' | 'PRESTAMO'
+            // ESTADOS DEL ESCÁNER QR, BUSCADOR EN VIVO Y BLOQUES DE ESTANTE
+            const [scanMode, setScanMode] = React.useState('INVENTARIO');
             const [asesorLote, setAsesorLote] = React.useState('');
             const [cameraActive, setCameraActive] = React.useState(false);
             const [camerasList, setCamerasList] = React.useState([]);
@@ -230,11 +305,18 @@
             const [torchOn, setTorchOn] = React.useState(false);
             const [scanFeedback, setScanFeedback] = React.useState(null);
             const [scanLog, setScanLog] = React.useState([]);
+            const [alertasEscaneo, setAlertasEscaneo] = React.useState([]); // Bitácora de errores para que no se pase ninguno
             const [liveSyncActive, setLiveSyncActive] = React.useState(true);
             const [lastSyncTime, setLastSyncTime] = React.useState('');
             const [lectorFisicoInput, setLectorFisicoInput] = React.useState('');
 
-            // Referencias sincronizadas para que la cámara nunca tenga que reiniciarse al cambiar modo o asesor
+            // Filtros en la Tabla de Inventario en Vivo (Buscador de nombre + Verificador por Bloques 1 al 50)
+            const [liveTableSearch, setLiveTableSearch] = React.useState('');
+            const [bloqueTamano, setBloqueTamano] = React.useState(50);
+            const [bloqueDesde, setBloqueDesde] = React.useState('');
+            const [bloqueHasta, setBloqueHasta] = React.useState('');
+            const [soloFaltantesBloque, setSoloFaltantesBloque] = React.useState(false);
+
             const html5QrInstanceRef = React.useRef(null);
             const lastScannedRef = React.useRef({ code: '', time: 0 });
             const expedientesRef = React.useRef(expedientes);
@@ -250,7 +332,6 @@
             React.useEffect(() => { sedeRef.current = sedeActual; }, [sedeActual]);
             React.useEffect(() => { localStorage.setItem('crediban_tickets_queue', JSON.stringify(ticketsQueue)); }, [ticketsQueue]);
 
-            // Fetch seguro compatible con Google Apps Script (evita errores CORS en móviles)
             const fetchGAS = async (payloadObj) => {
                 const res = await fetch(API_URL, {
                     method: 'POST',
@@ -282,13 +363,8 @@
                 return `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
             };
 
-            const formatIdExpediente = (rawNum) => {
-                const soloNum = String(rawNum).replace(/\D/g, '');
-                return soloNum ? "001-" + soloNum.padStart(5, '0') : '';
-            };
-
             // =====================================================================
-            // LOGIN SIN SELECTOR DE SEDE (DETECCIÓN AUTOMÁTICA DESDE USUARIOS)
+            // LOGIN SIN SELECTOR DE SEDE + RECORDAR CONTRASEÑA
             // =====================================================================
             const handleLogin = async (e) => {
                 e.preventDefault();
@@ -300,7 +376,6 @@
                 setLoadingMsg('Validando credenciales y detectando sede asignada...');
 
                 try {
-                    // Enviamos sede vacío ('') para que el servidor asigne automáticamente la sede del usuario
                     const data = await fetchGAS({
                         action: 'login',
                         usuario: usuarioInput.trim(),
@@ -321,7 +396,7 @@
                     if (rolClasificado === 'BLOQUEADO_ASESOR') {
                         playSound('alert');
                         setIsLoading(false);
-                        setLoginErrorMsg('⛔ ACCESO DENEGADO: Los Asesores no tienen acceso a este sistema. Uso exclusivo para Cajeros, Administradores y Gerentes.');
+                        setLoginErrorMsg('⛔ ACCESO DENEGADO: Los Asesores no tienen permiso para ingresar al sistema de expedientes.');
                         return;
                     }
 
@@ -332,22 +407,20 @@
                         return;
                     }
 
-                    // Guardar o limpiar contraseña según el botón "Recordar contraseña"
-                    localStorage.setItem('crediban_v20_user', usuarioInput.trim());
-                    localStorage.setItem('crediban_v20_remember', rememberPass ? 'true' : 'false');
+                    localStorage.setItem('crediban_v21_user', usuarioInput.trim());
+                    localStorage.setItem('crediban_v21_remember', rememberPass ? 'true' : 'false');
                     if (rememberPass) {
-                        localStorage.setItem('crediban_v20_pass', passwordInput.trim());
+                        localStorage.setItem('crediban_v21_pass', passwordInput.trim());
                     } else {
-                        localStorage.removeItem('crediban_v20_pass');
+                        localStorage.removeItem('crediban_v21_pass');
                     }
 
                     const sedeDetectada = data.sede || userObj.sedeActiva || 'HUACHO';
                     setSedeActual(sedeDetectada);
-                    localStorage.setItem('crediban_v20_sede', sedeDetectada);
+                    localStorage.setItem('crediban_v21_sede', sedeDetectada);
 
                     setOperadorNombre(userObj.nombreCorto || userObj.nombre || usuarioInput.toUpperCase());
                     setRolSistema(rolClasificado);
-                    setSedesPermitidas(Array.isArray(userObj.sedesPermitidas) ? userObj.sedesPermitidas : [sedeDetectada]);
 
                     if (data.parametros) aplicarCatalogoParametros(data.parametros);
                     if (Array.isArray(data.asesores)) setAsesores(data.asesores);
@@ -362,7 +435,6 @@
                 setIsLoading(false);
             };
 
-            // CAMBIO DE SEDE EN VIVO (HABILITADO EN BARRA SUPERIOR PARA GERENTES)
             const cambiarSedeActiva = async (nuevaSede) => {
                 if (!nuevaSede || nuevaSede === sedeActual) return;
                 setIsLoading(true);
@@ -376,7 +448,7 @@
                     });
                     if (data.status === 'success') {
                         setSedeActual(nuevaSede);
-                        localStorage.setItem('crediban_v20_sede', nuevaSede);
+                        localStorage.setItem('crediban_v21_sede', nuevaSede);
                         setExpedientes(data.data || []);
                         if (Array.isArray(data.asesores)) setAsesores(data.asesores);
                         if (data.parametros) aplicarCatalogoParametros(data.parametros);
@@ -388,9 +460,7 @@
                 setIsLoading(false);
             };
 
-            // =====================================================================
-            // SINCRONIZACIÓN EN VIVO CADA 3 SEGUNDOS (MULTICAJERO)
-            // =====================================================================
+            // SINCRONIZACIÓN EN VIVO CADA 3 SEGUNDOS
             React.useEffect(() => {
                 if (!isAuth || !liveSyncActive || (view !== 'escaner' && view !== 'dashboard')) return;
                 const timer = setInterval(async () => {
@@ -437,55 +507,54 @@
             };
 
             // =====================================================================
-            // PROCESADOR ULTRA-RÁPIDO DE LECTURA QR (LEE TODOS LOS FORMATOS)
+            // PROCESADOR QR UNIVERSAL: EMPAREJA "001-00007" CON "7" AUTOMÁTICAMENTE
             // =====================================================================
             const procesarLecturaQR = React.useCallback(async (rawText) => {
                 if (!rawText) return;
                 const clean = String(rawText).trim().toUpperCase();
 
-                // Filtro Anti-Rebote (1.3 seg para el mismo código exacto, instantáneo para códigos distintos)
                 const nowMs = Date.now();
                 if (lastScannedRef.current.code === clean && (nowMs - lastScannedRef.current.time) < 1300) {
                     return;
                 }
                 lastScannedRef.current = { code: clean, time: nowMs };
 
-                // Extraer ID de Expediente de cualquier formato:
-                // 1) "HUACHO|001-00124|CLIENTE"
-                // 2) "HUACHO|001-00124"
-                // 3) "001-00124" o "124"
-                let idDetectado = '';
+                let idNaturalDetectado = '';
                 let clienteQR = '';
 
                 if (clean.includes('|')) {
                     const partes = clean.split('|').map(p => p.trim());
                     const parteCodigo = partes.find(p => /\d+/.test(p)) || partes[1] || partes[0];
-                    const numExtraido = parteCodigo.includes('-') ? parteCodigo.split('-').pop() : parteCodigo;
-                    idDetectado = formatIdExpediente(numExtraido);
+                    idNaturalDetectado = normalizarIdNatural(parteCodigo);
                     if (partes.length >= 3) clienteQR = partes[2];
                 } else {
-                    const matchExp = clean.match(/001-(\d+)/);
-                    if (matchExp) {
-                        idDetectado = formatIdExpediente(matchExp[1]);
-                    } else {
-                        const soloDigitos = clean.replace(/\D/g, '');
-                        idDetectado = formatIdExpediente(soloDigitos);
-                    }
+                    idNaturalDetectado = normalizarIdNatural(clean);
                 }
 
-                if (!idDetectado) {
+                if (!idNaturalDetectado || !/\d+/.test(idNaturalDetectado)) {
                     playSound('alert');
-                    setScanFeedback({ type: 'error', title: 'CÓDIGO QR NO RECONOCIDO', subtitle: `Lectura: ${clean}` });
+                    const msgErr = { hora: getFechaHora(), titulo: 'QR INVÁLIDO', detalle: clean };
+                    setAlertasEscaneo(prev => [msgErr, ...prev.slice(0, 9)]);
+                    setScanFeedback({ type: 'error', title: '🚨 CÓDIGO QR NO RECONOCIDO', subtitle: `Lectura: ${clean}` });
                     return;
                 }
 
-                const exp = expedientesRef.current.find(x => x.id === idDetectado);
+                // BÚSQUEDA DUAL: Empareja tanto si en la base está como "7" o como "001-00007"
+                const exp = expedientesRef.current.find(x => normalizarIdNatural(x.id) === idNaturalDetectado);
+
                 if (!exp) {
                     playSound('alert');
+                    const codigoMostrar = `${idNaturalDetectado} (${formatearConCeros(idNaturalDetectado)})`;
+                    const msgErr = {
+                        hora: getFechaHora(),
+                        titulo: `NO EXISTE EXP. ${codigoMostrar}`,
+                        detalle: clienteQR || 'No registrado en la base de esta sede'
+                    };
+                    setAlertasEscaneo(prev => [msgErr, ...prev.slice(0, 9)]);
                     setScanFeedback({
                         type: 'error',
-                        title: `EXPEDIENTE ${idDetectado} NO EXISTE EN ${sedeRef.current}`,
-                        subtitle: clienteQR ? `Cliente en etiqueta: ${clienteQR}` : 'Regístralo primero en la Base de Datos'
+                        title: `🚨 EXPEDIENTE ${codigoMostrar} NO EXISTE EN ${sedeRef.current}`,
+                        subtitle: clienteQR ? `Etiqueta: ${clienteQR} — Regístralo en Base de Datos` : 'Regístralo primero en Base de Datos'
                     });
                     return;
                 }
@@ -496,13 +565,18 @@
                 const hoySesion = getHoyId();
                 const estadoPrevio = JSON.parse(JSON.stringify(exp));
 
-                // MODO 1: INVENTARIO EN VIVO MULTICAJERO
+                // MODO 1: INVENTARIO EN VIVO
                 if (modoActual === 'INVENTARIO') {
                     if (exp.invSesion === hoySesion && exp.invFecha) {
                         playSound('duplicate');
+                        setAlertasEscaneo(prev => [{
+                            hora: getFechaHora(),
+                            titulo: `DUPLICADO: EXP. ${exp.id}`,
+                            detalle: `${exp.cliente} (Ya pasado por ${exp.invCajero})`
+                        }, ...prev.slice(0, 9)]);
                         setScanFeedback({
                             type: 'warning',
-                            title: `⚠️ YA CONTABILIZADO: ${exp.id}`,
+                            title: `⚠️ YA CONTABILIZADO: EXP. ${exp.id} (${formatearConCeros(exp.id)})`,
                             subtitle: `${exp.cliente} — Escaneado por ${exp.invCajero || 'CAJERO'} (${exp.invFecha})`
                         });
                         return;
@@ -530,11 +604,11 @@
                         historial: nuevoHist
                     };
 
-                    setExpedientes(prev => prev.map(item => item.id === exp.id ? actualizado : item));
+                    setExpedientes(prev => prev.map(item => normalizarIdNatural(item.id) === idNaturalDetectado ? actualizado : item));
                     setScanLog(prev => [{ id: exp.id, cliente: exp.cliente, prev: estadoPrevio }, ...prev.slice(0, 29)]);
                     setScanFeedback({
                         type: esRestringido ? 'danger_ok' : 'success',
-                        title: `✅ INVENTARIO REGISTRADO: ${exp.id}`,
+                        title: `✅ INVENTARIO REGISTRADO: EXP. ${exp.id} (${formatearConCeros(exp.id)})`,
                         subtitle: `${exp.cliente} | Estado: ${exp.estadoCredito}${estabaFuera ? ' | 🔄 Devuelto a CAJA' : ''}`
                     });
 
@@ -543,14 +617,14 @@
                         playSound('duplicate');
                         setScanFeedback({
                             type: 'warning',
-                            title: `⚠️ YA CONTABILIZADO EN OTRO CELULAR: ${exp.id}`,
+                            title: `⚠️ YA CONTABILIZADO EN OTRO CELULAR: EXP. ${exp.id}`,
                             subtitle: `Registrado por ${resp.invCajero} (${resp.invFecha})`
                         });
                     }
                     return;
                 }
 
-                // MODO 2: RETORNO INTELIGENTE A CAJA (SIN ELEGIR ASESOR)
+                // MODO 2: RETORNO A CAJA
                 if (modoActual === 'RETORNO') {
                     playSound('beep');
                     const horaActual = getFechaHora();
@@ -569,18 +643,18 @@
                         historial: nuevoHist
                     };
 
-                    setExpedientes(prev => prev.map(item => item.id === exp.id ? actualizado : item));
+                    setExpedientes(prev => prev.map(item => normalizarIdNatural(item.id) === idNaturalDetectado ? actualizado : item));
                     setScanLog(prev => [{ id: exp.id, cliente: exp.cliente, prev: estadoPrevio }, ...prev.slice(0, 29)]);
                     setScanFeedback({
                         type: 'success',
-                        title: `📥 DEVUELTO A CAJA: ${exp.id}`,
+                        title: `📥 DEVUELTO A CAJA: EXP. ${exp.id}`,
                         subtitle: `${exp.cliente} (Retornado de: ${ubicacionPrevia})`
                     });
                     syncExpedienteCloud(actualizado, true);
                     return;
                 }
 
-                // MODO 3: SALIDA / PRÉSTAMO POR LOTE A ASESOR
+                // MODO 3: SALIDA / PRÉSTAMO POR LOTE
                 if (modoActual === 'PRESTAMO') {
                     if (!asesorSeleccionado) {
                         playSound('alert');
@@ -611,46 +685,35 @@
                         historial: nuevoHist
                     };
 
-                    setExpedientes(prev => prev.map(item => item.id === exp.id ? actualizado : item));
+                    setExpedientes(prev => prev.map(item => normalizarIdNatural(item.id) === idNaturalDetectado ? actualizado : item));
                     setScanLog(prev => [{ id: exp.id, cliente: exp.cliente, prev: estadoPrevio }, ...prev.slice(0, 29)]);
                     setScanFeedback({
                         type: esRestringido ? 'danger_ok' : (prestamoCruzado ? 'warning' : 'success'),
-                        title: `📤 ENTREGADO A ${asesorSeleccionado}: ${exp.id}`,
+                        title: `📤 ENTREGADO A ${asesorSeleccionado}: EXP. ${exp.id}`,
                         subtitle: `${exp.cliente} | Estado: ${exp.estadoCredito}${prestamoCruzado ? ` | ⚠️ Figuraba ${exp.ubicacionFisica}` : ''}`
                     });
                     syncExpedienteCloud(actualizado, true);
                 }
             }, []);
 
-            // =====================================================================
-            // MOTOR DE CÁMARA ROBUSTO CON ACELERACIÓN POR HARDWARE Y LINTERNA
-            // =====================================================================
+            // CÁMARA CONTINUA HTML5-QRCODE
             React.useEffect(() => {
-                if (view !== 'escaner' && cameraActive) {
-                    setCameraActive(false);
-                }
+                if (view !== 'escaner' && cameraActive) setCameraActive(false);
             }, [view]);
 
             React.useEffect(() => {
                 let isMounted = true;
-
                 const iniciarEscaner = async () => {
                     if (!cameraActive || view !== 'escaner' || !puedeOperarCaja) return;
-
                     try {
-                        // Detener instancia previa si existiera
                         if (html5QrInstanceRef.current && html5QrInstanceRef.current.isScanning) {
                             await html5QrInstanceRef.current.stop();
                             html5QrInstanceRef.current.clear();
                         }
-
-                        // Obtener lista de cámaras del dispositivo
                         if (camerasList.length === 0 && window.Html5Qrcode.getCameras) {
                             try {
                                 const devices = await window.Html5Qrcode.getCameras();
-                                if (isMounted && devices && devices.length > 0) {
-                                    setCamerasList(devices);
-                                }
+                                if (isMounted && devices && devices.length > 0) setCamerasList(devices);
                             } catch (e) {}
                         }
 
@@ -660,59 +723,45 @@
                         });
                         html5QrInstanceRef.current = qrReader;
 
-                        const camConfig = selectedCamId
-                            ? { deviceId: { exact: selectedCamId } }
-                            : { facingMode: "environment" };
-
+                        const camConfig = selectedCamId ? { deviceId: { exact: selectedCamId } } : { facingMode: "environment" };
                         await qrReader.start(
                             camConfig,
                             {
                                 fps: 25,
-                                qrbox: (viewfinderWidth, viewfinderHeight) => {
-                                    const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
-                                    const boxSize = Math.max(170, Math.floor(minEdge * 0.80));
-                                    return { width: boxSize, height: boxSize };
+                                qrbox: (vw, vh) => {
+                                    const side = Math.max(175, Math.floor(Math.min(vw, vh) * 0.80));
+                                    return { width: side, height: side };
                                 },
-                                aspectRatio: 1.0,
-                                disableFlip: false
+                                aspectRatio: 1.0
                             },
-                            (decodedText) => {
-                                procesarLecturaQR(decodedText);
-                            },
+                            (decodedText) => procesarLecturaQR(decodedText),
                             () => {}
                         );
                     } catch (err) {
                         if (isMounted) {
-                            alert("No se pudo iniciar la cámara. Asegúrate de abrir la app en HTTPS o localhost y aceptar los permisos de cámara.");
+                            alert("No se pudo iniciar la cámara. Acepta los permisos de cámara del navegador.");
                             setCameraActive(false);
                         }
                     }
                 };
-
                 iniciarEscaner();
-
                 return () => {
                     isMounted = false;
                     setTorchOn(false);
                     if (html5QrInstanceRef.current && html5QrInstanceRef.current.isScanning) {
-                        html5QrInstanceRef.current.stop()
-                            .then(() => html5QrInstanceRef.current.clear())
-                            .catch(() => {});
+                        html5QrInstanceRef.current.stop().then(() => html5QrInstanceRef.current.clear()).catch(() => {});
                     }
                 };
             }, [cameraActive, view, selectedCamId]);
 
-            // Activar / Desactivar Linterna (Flash) del celular si el lente lo soporta
             const toggleLinterna = async () => {
                 if (!html5QrInstanceRef.current || !html5QrInstanceRef.current.isScanning) return;
                 try {
                     const nextState = !torchOn;
-                    await html5QrInstanceRef.current.applyVideoConstraints({
-                        advanced: [{ torch: nextState }]
-                    });
+                    await html5QrInstanceRef.current.applyVideoConstraints({ advanced: [{ torch: nextState }] });
                     setTorchOn(nextState);
                 } catch (e) {
-                    alert("Este lente de cámara no soporta encendido de linterna desde el navegador.");
+                    alert("Este lente no soporta encendido de flash desde el navegador.");
                 }
             };
 
@@ -720,11 +769,11 @@
                 if (scanLog.length === 0) return;
                 const ultimo = scanLog[0];
                 const restaurado = ultimo.prev;
-                setExpedientes(prev => prev.map(item => item.id === restaurado.id ? restaurado : item));
+                setExpedientes(prev => prev.map(item => normalizarIdNatural(item.id) === normalizarIdNatural(restaurado.id) ? restaurado : item));
                 setScanLog(prev => prev.slice(1));
                 setScanFeedback({
                     type: 'warning',
-                    title: `↩️ ESCANEO DESHECHO: ${restaurado.id}`,
+                    title: `↩️ ESCANEO DESHECHO: EXP. ${restaurado.id}`,
                     subtitle: `Se restauró el estado anterior de ${restaurado.cliente}`
                 });
                 await syncExpedienteCloud(restaurado, true);
@@ -738,6 +787,7 @@
                     await fetchGAS({ action: 'resetInventario', sede: sedeActual, usuario: operadorNombre });
                     setExpedientes(prev => prev.map(e => ({ ...e, invFecha: '', invCajero: '', invSesion: '' })));
                     setScanLog([]);
+                    setAlertasEscaneo([]);
                     setScanFeedback(null);
                 } catch (e) {
                     alert('Error al reiniciar el inventario.');
@@ -746,7 +796,100 @@
             };
 
             // =====================================================================
-            // REGISTRO, CATEGORIZACIÓN Y EDICIÓN DE EXPEDIENTES
+            // CÁLCULO DE BLOQUES DE ESTANTE (EJ. DEL 1 AL 50, 51 AL 100, ETC.)
+            // =====================================================================
+            const hoySesionId = getHoyId();
+            const totalContabilizadosHoy = expedientes.filter(e => e.invSesion === hoySesionId && e.invFecha).length;
+
+            // Determinar el número máximo de expediente en la sede para armar botones de bloques dinámicos
+            const maxNumExpediente = React.useMemo(() => {
+                let max = 50;
+                expedientes.forEach(e => {
+                    const n = parseInt(normalizarIdNatural(e.id), 10);
+                    if (!isNaN(n) && n > max) max = n;
+                });
+                return Math.ceil(max / bloqueTamano) * bloqueTamano;
+            }, [expedientes, bloqueTamano]);
+
+            const bloquesPredefinidos = React.useMemo(() => {
+                const arr = [];
+                const limite = Math.min(maxNumExpediente, 2000);
+                for (let ini = 1; ini <= limite; ini += bloqueTamano) {
+                    const fin = ini + bloqueTamano - 1;
+                    const expsEnBloque = expedientes.filter(e => {
+                        const n = parseInt(normalizarIdNatural(e.id), 10);
+                        return !isNaN(n) && n >= ini && n <= fin;
+                    });
+                    const listos = expsEnBloque.filter(e => e.invSesion === hoySesionId && e.invFecha).length;
+                    arr.push({
+                        ini,
+                        fin,
+                        total: expsEnBloque.length,
+                        listos,
+                        completo: expsEnBloque.length > 0 && listos === expsEnBloque.length
+                    });
+                }
+                return arr;
+            }, [expedientes, maxNumExpediente, bloqueTamano, hoySesionId]);
+
+            // Filtrado en vivo de la tabla de inventario (por Nombre/ID y por Bloque de Estante)
+            const expedientesTablaVivo = React.useMemo(() => {
+                let lista = [...expedientes];
+                const d = parseInt(bloqueDesde, 10);
+                const h = parseInt(bloqueHasta, 10);
+
+                if (!isNaN(d) || !isNaN(h)) {
+                    const minR = !isNaN(d) ? d : 1;
+                    const maxR = !isNaN(h) ? h : 999999;
+                    lista = lista.filter(e => {
+                        const num = parseInt(normalizarIdNatural(e.id), 10);
+                        return !isNaN(num) && num >= minR && num <= maxR;
+                    });
+                    // Ordenar numéricamente del menor al mayor dentro del bloque
+                    lista.sort((a, b) => parseInt(normalizarIdNatural(a.id), 10) - parseInt(normalizarIdNatural(b.id), 10));
+                }
+
+                if (soloFaltantesBloque) {
+                    lista = lista.filter(e => !(e.invSesion === hoySesionId && e.invFecha));
+                }
+
+                if (liveTableSearch.trim() !== '') {
+                    const q = liveTableSearch.toUpperCase().trim();
+                    const qNat = normalizarIdNatural(q);
+                    lista = lista.filter(e => {
+                        const idNat = normalizarIdNatural(e.id);
+                        return e.cliente.includes(q) || String(e.id).includes(q) || (qNat && idNat === qNat);
+                    });
+                }
+                return lista;
+            }, [expedientes, bloqueDesde, bloqueHasta, soloFaltantesBloque, liveTableSearch, hoySesionId]);
+
+            // Detectar qué números exactos faltan escanear dentro del bloque seleccionado
+            const resumenBloqueActivo = React.useMemo(() => {
+                const d = parseInt(bloqueDesde, 10);
+                const h = parseInt(bloqueHasta, 10);
+                if (isNaN(d) || isNaN(h) || d > h) return null;
+
+                const enRango = expedientes.filter(e => {
+                    const num = parseInt(normalizarIdNatural(e.id), 10);
+                    return !isNaN(num) && num >= d && num <= h;
+                });
+                const escaneados = enRango.filter(e => e.invSesion === hoySesionId && e.invFecha);
+                const pendientes = enRango.filter(e => !(e.invSesion === hoySesionId && e.invFecha));
+
+                return {
+                    desde: d,
+                    hasta: h,
+                    totalRegistrados: enRango.length,
+                    escaneadosCount: escaneados.length,
+                    pendientesCount: pendientes.length,
+                    completo: enRango.length > 0 && pendientes.length === 0,
+                    listaPendientes: pendientes.map(p => `${normalizarIdNatural(p.id)} (${p.cliente.split(' ')[0]})`)
+                };
+            }, [expedientes, bloqueDesde, bloqueHasta, hoySesionId]);
+
+            // =====================================================================
+            // REGISTRO, CATEGORIZACIÓN Y EDICIÓN DE EXPEDIENTES (DNI = NO IDENTIFICADO)
             // =====================================================================
             const [formInv, setFormInv] = React.useState({ idExp: '', cliente: '', estadoCredito: 'ACTIVO', asesorTitular: '', categoriaExtra: '', generarTicket: true });
             const [editMode, setEditMode] = React.useState(null);
@@ -759,18 +902,18 @@
                 if (!formInv.asesorTitular) return alert("Debes seleccionar un Asesor Titular.");
                 if (!formInv.idExp) return alert("Ingresa el N° de Expediente.");
                 
-                let idFinal = formatIdExpediente(formInv.idExp);
-                if (!idFinal) return alert("El N° de Expediente debe contener números.");
+                let idNatural = normalizarIdNatural(formInv.idExp);
+                if (!idNatural || !/\d+/.test(idNatural)) return alert("El N° de Expediente debe contener números.");
                 
-                while (expedientes.some(x => x.id === idFinal)) {
-                    const correccion = prompt(`❌ EXPEDIENTE DUPLICADO.\nEl N° de Expediente ${idFinal} ya existe en ${sedeActual}.\n\nIngresa el N° correcto:`);
+                while (expedientes.some(x => normalizarIdNatural(x.id) === idNatural)) {
+                    const correccion = prompt(`❌ EXPEDIENTE DUPLICADO.\nEl Expediente N° ${idNatural} (${formatearConCeros(idNatural)}) ya existe en ${sedeActual}.\n\nIngresa el N° correcto:`);
                     if (correccion === null || correccion.trim() === '') return;
-                    idFinal = formatIdExpediente(correccion);
+                    idNatural = normalizarIdNatural(correccion);
                 }
 
                 const nuevo = {
-                    id: idFinal, 
-                    dni: 'CONFIDENCIAL',
+                    id: idNatural, // Se guarda como número natural para coincidir con tu base
+                    dni: 'NO IDENTIFICADO',
                     cliente: formInv.cliente.toUpperCase().trim(),
                     estadoCredito: formInv.estadoCredito, 
                     asesorTitular: formInv.asesorTitular,
@@ -785,12 +928,13 @@
                 
                 setExpedientes([nuevo, ...expedientes]);
                 if (formInv.generarTicket) {
-                    setTicketsQueue([...ticketsQueue, { id: idFinal, cliente: nuevo.cliente, sede: sedeActual }]);
+                    setTicketsQueue([...ticketsQueue, { id: formatearConCeros(idNatural), idNat: idNatural, cliente: nuevo.cliente, sede: sedeActual }]);
                 }
                 setFormInv({ idExp: '', cliente: '', estadoCredito: 'ACTIVO', asesorTitular: '', categoriaExtra: '', generarTicket: formInv.generarTicket });
                 
                 await syncExpedienteCloud(nuevo);
-                alert(`✅ Expediente ${idFinal} registrado en la nube.`);
+                playSound('beep');
+                alert(`✅ Expediente N° ${idNatural} registrado en la nube.`);
             };
 
             const guardarEdicionGerencial = async (expActual) => {
@@ -827,7 +971,7 @@
                             fechaUltimoMov: ahora,
                             historial: nuevoHist
                         };
-                        setExpedientes(expedientes.map(x => x.id === expActual.id ? actualizado : x));
+                        setExpedientes(expedientes.map(x => normalizarIdNatural(x.id) === normalizarIdNatural(expActual.id) ? actualizado : x));
                         setEditMode(null);
                     } else {
                         alert(`❌ Error: ${data.message}`);
@@ -849,11 +993,11 @@
                 const val = e.target.value.toUpperCase();
                 setMovBusqueda(val);
                 if (val.length < 1) { setSugerencias([]); return; }
-                const termNormalized = val.replace(/^(001-)?0*/, ''); 
+                const termNat = normalizarIdNatural(val);
                 
                 const matches = expedientes.filter(exp => {
-                    const idNorm = String(exp.id).toUpperCase().replace(/^(001-)?0*/, '');
-                    return exp.cliente.includes(val) || idNorm.includes(termNormalized);
+                    const idNat = normalizarIdNatural(exp.id);
+                    return exp.cliente.includes(val) || idNat === termNat || idNat.includes(termNat);
                 });
                 setSugerencias(matches.slice(0, 6));
             };
@@ -865,9 +1009,10 @@
                 if (!quienPresta) return alert("Selecciona a quién se entrega el expediente.");
                 const expActualizado = { ...expEncontrado, ubicacionFisica: `CON ASESOR: ${quienPresta}`, fechaUltimoMov: getFechaHora() };
                 expActualizado.historial = [{ fecha: getFechaHora(), accion: 'PRÉSTAMO', detalle: `Entregado físico a ${quienPresta} por ${operadorNombre}` }, ...(expEncontrado.historial || [])];
-                setExpedientes(expedientes.map(e => e.id === expActualizado.id ? expActualizado : e));
+                setExpedientes(expedientes.map(e => normalizarIdNatural(e.id) === normalizarIdNatural(expActualizado.id) ? expActualizado : e));
                 setExpEncontrado(null);
                 await syncExpedienteCloud(expActualizado);
+                playSound('beep');
                 alert(`✅ Expediente prestado a ${quienPresta}`);
             };
 
@@ -875,14 +1020,15 @@
                 if (!puedeOperarCaja) return;
                 const expActualizado = { ...expEncontrado, ubicacionFisica: ubicacionDestino, fechaUltimoMov: getFechaHora() };
                 expActualizado.historial = [{ fecha: getFechaHora(), accion: 'DEVOLUCIÓN', detalle: `Retornado a ${ubicacionDestino} por ${operadorNombre}` }, ...(expEncontrado.historial || [])];
-                setExpedientes(expedientes.map(e => e.id === expActualizado.id ? expActualizado : e));
+                setExpedientes(expedientes.map(e => normalizarIdNatural(e.id) === normalizarIdNatural(expActualizado.id) ? expActualizado : e));
                 setExpEncontrado(null);
                 await syncExpedienteCloud(expActualizado);
+                playSound('beep');
                 alert(`✅ Expediente retornado a ${ubicacionDestino}.`);
             };
 
             // =====================================================================
-            // FILTROS Y BUSCADOR DE SEDE (ADMINISTRADORES, CAJEROS Y GERENTES)
+            // FILTROS Y BUSCADOR DE SEDE (DASHBOARD / ADMINISTRADORES / GERENTES)
             // =====================================================================
             const [dashSearchQuery, setDashSearchQuery] = React.useState('');
             const [dashFilterAsesor, setDashFilterAsesor] = React.useState('TODOS');
@@ -891,15 +1037,13 @@
             const [dashFiltroInv, setDashFiltroInv] = React.useState('TODOS');
             const [modalReporte, setModalReporte] = React.useState(false);
 
-            const hoySesionId = getHoyId();
             let listaDash = expedientes;
-
             if (dashSearchQuery.trim() !== '') {
                 const q = dashSearchQuery.toUpperCase().trim();
-                const qNum = q.replace(/^(001-)?0*/, '');
+                const qNat = normalizarIdNatural(q);
                 listaDash = listaDash.filter(e => {
-                    const idNorm = String(e.id).toUpperCase().replace(/^(001-)?0*/, '');
-                    return e.cliente.includes(q) || e.id.includes(q) || (qNum && idNorm.includes(qNum));
+                    const idNat = normalizarIdNatural(e.id);
+                    return e.cliente.includes(q) || String(e.id).includes(q) || (qNat && idNat.includes(qNat));
                 });
             }
             if (dashFilterAsesor !== 'TODOS') listaDash = listaDash.filter(e => e.asesorTitular === dashFilterAsesor);
@@ -909,11 +1053,7 @@
             if (dashFiltroInv === 'CONTABILIZADO') listaDash = listaDash.filter(e => e.invSesion === hoySesionId && e.invFecha);
             if (dashFiltroInv === 'FALTANTE') listaDash = listaDash.filter(e => !(e.invSesion === hoySesionId && e.invFecha));
 
-            const totalContabilizadosHoy = expedientes.filter(e => e.invSesion === hoySesionId && e.invFecha).length;
-
-            // =====================================================================
-            // EXPORTACIÓN CSV Y PDF (EXCLUSIVO GERENTES)
-            // =====================================================================
+            // EXPORTACIÓN CSV Y PDF DE REPORTES (SOLO GERENTES)
             const exportarCSV = (soloSeleccionFiltrada = false) => {
                 if (!puedeExportar) return alert("⛔ Solo los Gerentes tienen autorización para exportar registros.");
                 const fuente = soloSeleccionFiltrada ? listaDash : expedientes;
@@ -924,7 +1064,7 @@
                 let csv = "ID_Expediente,DNI,Cliente,Estado_Credito,Asesor_Titular,Ubicacion_Fisica,Fecha_Ultimo_Movimiento,Inventario_Fecha,Inventario_Cajero,Categoria_Extra,Historial_JSON\n";
                 fuente.forEach(e => { 
                     const histStr = JSON.stringify(e.historial || []).replace(/"/g, '""');
-                    csv += `"${e.id}","${e.dni}","${e.cliente}","${e.estadoCredito}","${e.asesorTitular}","${e.ubicacionFisica}","${e.fechaUltimoMov}","${e.invFecha || ''}","${e.invCajero || ''}","${e.categoriaExtra || ''}","${histStr}"\n`; 
+                    csv += `"${e.id}","NO IDENTIFICADO","${e.cliente}","${e.estadoCredito}","${e.asesorTitular}","${e.ubicacionFisica}","${e.fechaUltimoMov}","${e.invFecha || ''}","${e.invCajero || ''}","${e.categoriaExtra || ''}","${histStr}"\n`; 
                 });
                 const blob = new Blob(["\uFEFF" + csv], { type: 'text/csv;charset=utf-8;' });
                 const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = fileName; a.click();
@@ -982,7 +1122,7 @@
                         if (inQuotes && line[i+1] === '"') { current += '"'; i++; } 
                         else { inQuotes = !inQuotes; }
                     }
-                    else if (char === ',' && !inQuotes) { result.push(current.trim()); current = ''; }
+                    else if ((char === ',' || char === ';') && !inQuotes) { result.push(current.trim()); current = ''; }
                     else current += char;
                 }
                 result.push(current.trim());
@@ -1002,27 +1142,26 @@
                     for (let i = 1; i < lines.length; i++) {
                         if (!lines[i].trim()) continue;
                         const cols = parseCSVLine(lines[i]);
-                        if (cols.length >= 5) {
-                            let rawId = cols[0];
-                            let baseNum = rawId.includes('-') ? rawId.split('-')[1] : rawId;
-                            let idFormal = formatIdExpediente(baseNum);
+                        if (cols.length >= 2) {
+                            const idNatural = normalizarIdNatural(cols[0]);
+                            // Si el CSV tiene 5+ columnas (ID, DNI, Cliente, Estado, Asesor) o 4 columnas sin DNI (ID, Cliente, Estado, Asesor)
+                            const tieneColDNI = cols.length >= 5;
+                            const cliente = (tieneColDNI ? cols[2] : cols[1] || '').toUpperCase().trim();
+                            const estado = (tieneColDNI ? cols[3] : cols[2] || 'ACTIVO').toUpperCase().trim();
+                            const asesor = (tieneColDNI ? cols[4] : cols[3] || 'SIN ASIGNAR').toUpperCase().trim();
+                            const ubicacionFisica = (tieneColDNI && cols[5] ? cols[5] : 'CAJA (ARCHIVO)').toUpperCase().trim();
+                            const fechaUltimoMov = getFechaHora();
 
-                            const dni = cols[1] ? cols[1].replace(/\D/g, '') : 'CONFIDENCIAL';
-                            const cliente = cols[2] ? cols[2].toUpperCase() : '';
-                            const estado = cols[3] ? cols[3].toUpperCase() : 'ACTIVO';
-                            const asesor = cols[4] ? cols[4].toUpperCase() : '';
-                            const ubicacionFisica = cols[5] ? cols[5].toUpperCase() : 'CAJA (ARCHIVO)';
-                            const fechaUltimoMov = cols[6] ? cols[6] : getFechaHora();
-
-                            let historialRescatado = [{ fecha: getFechaHora(), accion: 'MIGRACIÓN / CARGA', detalle: `Ingresado masivamente por ${operadorNombre}` }];
-                            if (cols[7] && cols[7].trim().startsWith('[')) {
-                                try { historialRescatado = JSON.parse(cols[7]); } catch(err) {}
-                            }
-
-                            if (idFormal && !nuevos.some(x => x.id === idFormal)) {
+                            if (idNatural && cliente && !nuevos.some(x => normalizarIdNatural(x.id) === idNatural)) {
                                 const exp = {
-                                    id: idFormal, dni, cliente, estadoCredito: estado, asesorTitular: asesor,
-                                    ubicacionFisica, fechaUltimoMov, historial: historialRescatado,
+                                    id: idNatural,
+                                    dni: 'NO IDENTIFICADO',
+                                    cliente,
+                                    estadoCredito: estado || 'ACTIVO',
+                                    asesorTitular: asesor,
+                                    ubicacionFisica,
+                                    fechaUltimoMov,
+                                    historial: [{ fecha: fechaUltimoMov, accion: 'MIGRACIÓN CSV', detalle: `Cargado por ${operadorNombre}` }],
                                     invFecha: '', invCajero: '', invSesion: '', categoriaExtra: ''
                                 };
                                 nuevos.push(exp);
@@ -1038,14 +1177,14 @@
                         setLoadingMsg('Subiendo lote masivo a Google Sheets...');
                         await fetchGAS({ action: 'bulkSave', sede: sedeActual, usuario: operadorNombre, data: listaParaLaNube });
                         setIsLoading(false);
-                        alert(`✅ Carga Exitosa: Se migraron ${count} expedientes a ${sedeActual}.`);
+                        alert(`✅ Carga Exitosa: Se migraron ${count} expedientes a ${sedeActual} (DNI rellenado con NO IDENTIFICADO).`);
                     }
                 };
                 reader.readAsText(file); e.target.value = '';
             };
 
             // =====================================================================
-            // GENERADOR MASIVO DE TICKETS QR Y PERSONALIZADOR DE DISEÑO A4
+            // GENERADOR DE TICKETS QR + EXPORTADOR NATIVO A PDF A4 (SIN DESCUADRES)
             // =====================================================================
             const [manualId, setManualId] = React.useState('');
             const [manualCliente, setManualCliente] = React.useState('');
@@ -1053,12 +1192,26 @@
             const [rangoHasta, setRangoHasta] = React.useState('');
             const [excelPasteText, setExcelPasteText] = React.useState('');
 
+            const obtenerCodigoVisibleTicket = (idRaw) => {
+                return printConfig.formatoCodigoRojo === 'NATURAL'
+                    ? normalizarIdNatural(idRaw)
+                    : formatearConCeros(idRaw);
+            };
+
+            const armarPayloadQR = (ticket) => {
+                const sedeT = ticket.sede || sedeActual;
+                const codFormal = formatearConCeros(ticket.id);
+                if (printConfig.qrDataMode === 'MINIMO') return codFormal;
+                if (printConfig.qrDataMode === 'COMPACTO') return `${sedeT}|${codFormal}`;
+                return `${sedeT}|${codFormal}|${ticket.cliente}`;
+            };
+
             const agregarTicketManual = (e) => {
                 e.preventDefault();
                 if (!manualId || !manualCliente) return;
-                const idFormal = formatIdExpediente(manualId);
-                if (!idFormal) return alert("El N° de Expediente debe contener números.");
-                setTicketsQueue([...ticketsQueue, { id: idFormal, cliente: manualCliente.toUpperCase(), sede: sedeActual }]);
+                const idNat = normalizarIdNatural(manualId);
+                if (!idNat) return alert("El N° de Expediente debe contener números.");
+                setTicketsQueue([...ticketsQueue, { id: formatearConCeros(idNat), idNat, cliente: manualCliente.toUpperCase().trim(), sede: sedeActual }]);
                 setManualId(''); setManualCliente('');
             };
 
@@ -1069,15 +1222,15 @@
                     const d = parseInt(rangoDesde.replace(/\D/g, ''), 10) || 1;
                     const h = parseInt(rangoHasta.replace(/\D/g, ''), 10) || 999999;
                     filtrados = filtrados.filter(e => {
-                        const num = parseInt(String(e.id).split('-')[1] || e.id, 10);
-                        return num >= d && num <= h;
+                        const num = parseInt(normalizarIdNatural(e.id), 10);
+                        return !isNaN(num) && num >= d && num <= h;
                     });
                 }
                 if (filtrados.length === 0) return alert("Ningún expediente coincide con ese rango.");
-                filtrados.sort((a, b) => a.id.localeCompare(b.id));
-                const nuevosTickets = filtrados.map(e => ({ id: e.id, cliente: e.cliente, sede: sedeActual }));
+                filtrados.sort((a, b) => parseInt(normalizarIdNatural(a.id), 10) - parseInt(normalizarIdNatural(b.id), 10));
+                const nuevosTickets = filtrados.map(e => ({ id: formatearConCeros(e.id), idNat: normalizarIdNatural(e.id), cliente: e.cliente, sede: sedeActual }));
                 setTicketsQueue([...ticketsQueue, ...nuevosTickets]);
-                alert(`✅ Se cargaron ${nuevosTickets.length} etiquetas con Código QR a la cola de impresión.`);
+                alert(`✅ Se cargaron ${nuevosTickets.length} etiquetas QR a la cola de impresión.`);
             };
 
             const procesarPegadoMasivoExcel = () => {
@@ -1087,10 +1240,9 @@
                 lineas.forEach(l => {
                     const partes = l.split(/\t|,|;/).map(s => s.trim()).filter(Boolean);
                     if (partes.length >= 2) {
-                        const rawNum = partes[0].includes('-') ? partes[0].split('-')[1] : partes[0];
-                        const idF = formatIdExpediente(rawNum);
+                        const idNat = normalizarIdNatural(partes[0]);
                         const cli = partes.slice(1).join(' ').toUpperCase();
-                        if (idF && cli) generados.push({ id: idF, cliente: cli, sede: sedeActual });
+                        if (idNat && cli) generados.push({ id: formatearConCeros(idNat), idNat, cliente: cli, sede: sedeActual });
                     }
                 });
                 if (generados.length === 0) return alert("Pega al menos 2 columnas desde Excel: N° Expediente y Nombre del Cliente.");
@@ -1099,27 +1251,130 @@
                 alert(`✅ Se generaron ${generados.length} etiquetas QR listas para imprimir.`);
             };
 
-            const parseTicketName = (fullName) => {
-                const words = String(fullName || '').trim().split(/\s+/);
-                if (words.length <= 2) return { part1: fullName, part2: '' };
-                return { part1: `${words[0]} ${words[1]}`, part2: words.slice(2).join(' ') };
+            // DESCARGAR TICKETS DIRECTAMENTE EN UN PDF A4 VECTORIAL EXACTO (SOLUCIÓN DEFINITIVA A IMAGEN 2)
+            const descargarTicketsPDFExacto = () => {
+                if (ticketsQueue.length === 0) return alert("Primero añade etiquetas a la cola de impresión.");
+                const { jsPDF } = window.jspdf;
+                const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+
+                const marginX = 5;
+                const marginY = 6;
+                const colWidth = 50; // 4 columnas x 50mm = 200mm (centrado en A4 de 210mm)
+                const rowHeight = Math.min(46, Math.max(36, printConfig.ticketHeightMm || 40));
+
+                printPages.forEach((page, pageIndex) => {
+                    if (pageIndex > 0) doc.addPage();
+
+                    page.forEach((t, idx) => {
+                        const col = idx % 4;
+                        const row = Math.floor(idx / 4);
+                        const x = marginX + col * colWidth;
+                        const y = marginY + row * rowHeight;
+
+                        // Borde exterior de la celda
+                        doc.setDrawColor(0, 0, 0);
+                        doc.setLineWidth(0.45);
+                        doc.rect(x, y, colWidth, rowHeight);
+
+                        const headerH = printConfig.showHeaderSede ? 4.5 : 0;
+                        const footerH = 11.5;
+                        const bodyY = y + headerH;
+                        const bodyH = rowHeight - headerH - footerH;
+
+                        // Barra superior de Sede
+                        if (printConfig.showHeaderSede) {
+                            doc.line(x, y + headerH, x + colWidth, y + headerH);
+                            if (!t.isEmpty) {
+                                doc.setFont("helvetica", "bold");
+                                doc.setFontSize(6.5);
+                                doc.setTextColor(0, 0, 0);
+                                doc.text(String(t.sede || sedeActual), x + 1.5, y + 3.2);
+                                doc.setTextColor(110, 110, 110);
+                                doc.text("CREDIBAN", x + colWidth - 1.5, y + 3.2, { align: "right" });
+                            }
+                        }
+
+                        // Línea divisoria del código rojo inferior
+                        doc.line(x, y + rowHeight - footerH, x + colWidth, y + rowHeight - footerH);
+
+                        if (!t.isEmpty) {
+                            // Generar imagen QR de alta definición en memoria
+                            const qrCanvas = document.createElement('canvas');
+                            new window.QRious({
+                                element: qrCanvas,
+                                value: armarPayloadQR(t),
+                                size: 300,
+                                level: 'L',
+                                background: '#ffffff',
+                                foreground: '#000000',
+                                padding: 20
+                            });
+                            const qrDataUrl = qrCanvas.toDataURL('image/png');
+
+                            // Convertir tamaño px a mm proporcional para que quepa perfecto en la celda de 50mm
+                            const qrMm = Math.min(bodyH - 1.5, Math.max(15, (printConfig.qrSize / 70) * 19.5));
+
+                            if (printConfig.qrPosition === 'IZQUIERDA' || printConfig.qrPosition === 'DERECHA') {
+                                const qrX = printConfig.qrPosition === 'IZQUIERDA' ? (x + 1.2) : (x + colWidth - qrMm - 1.2);
+                                const qrY = bodyY + (bodyH - qrMm) / 2;
+                                doc.addImage(qrDataUrl, 'PNG', qrX, qrY, qrMm, qrMm);
+
+                                // Área libre para el Nombre del Cliente (sin partir palabras jamás)
+                                const textAreaX = printConfig.qrPosition === 'IZQUIERDA' ? (x + qrMm + 1.8) : (x + 1.5);
+                                const textAreaW = colWidth - qrMm - 3.2;
+                                const textCenterX = textAreaX + (textAreaW / 2);
+
+                                doc.setFont("helvetica", "bold");
+                                doc.setTextColor(0, 0, 0);
+
+                                // Auto-ajuste de fuente para que ninguna palabra exceda textAreaW
+                                let fontPt = printConfig.fontSizeCliente > 0 ? (printConfig.fontSizeCliente * 0.72) : 9.5;
+                                doc.setFontSize(fontPt);
+                                let lineas = doc.splitTextToSize(String(t.cliente || ''), textAreaW);
+
+                                while ((lineas.length > 4 || palabrasCortadas(String(t.cliente || ''), textAreaW, doc)) && fontPt > 6.2) {
+                                    fontPt -= 0.5;
+                                    doc.setFontSize(fontPt);
+                                    lineas = doc.splitTextToSize(String(t.cliente || ''), textAreaW);
+                                }
+
+                                const lineHeightMm = fontPt * 0.40;
+                                const totalTextH = lineas.length * lineHeightMm;
+                                let startTextY = bodyY + (bodyH - totalTextH) / 2 + (lineHeightMm * 0.78);
+
+                                lineas.slice(0, 4).forEach((lin, lIdx) => {
+                                    doc.text(lin, textCenterX, startTextY + (lIdx * lineHeightMm), { align: "center" });
+                                });
+                            } else if (printConfig.qrPosition === 'ARRIBA') {
+                                const qrSmall = Math.min(qrMm, bodyH - 6);
+                                doc.addImage(qrDataUrl, 'PNG', x + (colWidth - qrSmall) / 2, bodyY + 0.8, qrSmall, qrSmall);
+                                doc.setFont("helvetica", "bold");
+                                doc.setFontSize(7.5);
+                                doc.setTextColor(0, 0, 0);
+                                const lin = doc.splitTextToSize(String(t.cliente || ''), colWidth - 3);
+                                doc.text(lin[0] || '', x + colWidth / 2, bodyY + qrSmall + 3.8, { align: "center" });
+                            } else {
+                                // GIGANTE
+                                const qrBig = Math.min(colWidth - 4, bodyH - 1.5);
+                                doc.addImage(qrDataUrl, 'PNG', x + (colWidth - qrBig) / 2, bodyY + (bodyH - qrBig) / 2, qrBig, qrBig);
+                            }
+
+                            // Código Rojo Inferior
+                            doc.setFont("helvetica", "bold");
+                            doc.setFontSize(Math.min(22, (printConfig.fontSizeCodigo || 24) * 0.78));
+                            doc.setTextColor(220, 38, 38);
+                            const codMostrar = obtenerCodigoVisibleTicket(t.id);
+                            doc.text(codMostrar, x + colWidth / 2, y + rowHeight - (footerH / 2) + 2.5, { align: "center" });
+                        }
+                    });
+                });
+
+                doc.save(`Tickets_QR_${sedeActual}_${Date.now()}.pdf`);
             };
 
-            const obtenerEstiloNombreCliente = (name) => {
-                if (printConfig.fontSizeCliente > 0) {
-                    return { fontSize: `${printConfig.fontSizeCliente}px`, lineHeight: '1.08', fontFamily: 'Arial, sans-serif' };
-                }
-                const len = String(name || '').length;
-                if (len >= 34) return { fontSize: '10px', lineHeight: '1.05', fontFamily: 'Arial, sans-serif' };
-                if (len >= 22) return { fontSize: '12px', lineHeight: '1.08', fontFamily: 'Arial, sans-serif' };
-                return { fontSize: '14px', lineHeight: '1.1', fontFamily: 'Arial, sans-serif' };
-            };
-
-            const armarPayloadQR = (ticket) => {
-                const sedeT = ticket.sede || sedeActual;
-                if (printConfig.qrDataMode === 'MINIMO') return `${ticket.id}`;
-                if (printConfig.qrDataMode === 'COMPACTO') return `${sedeT}|${ticket.id}`;
-                return `${sedeT}|${ticket.id}|${ticket.cliente}`;
+            const palabrasCortadas = (nombre, maxW, doc) => {
+                const palabras = nombre.split(/\s+/);
+                return palabras.some(p => doc.getTextWidth(p) > maxW);
             };
 
             const processTicketsForPrint = () => {
@@ -1136,7 +1391,7 @@
             const printPages = processTicketsForPrint();
 
             // =====================================================================
-            // GESTIÓN DINÁMICA DE PARÁMETROS Y SINCRONIZACIÓN (GERENCIA)
+            // PARÁMETROS DEL SISTEMA (GERENCIA)
             // =====================================================================
             const [nuevoParamValor, setNuevoParamValor] = React.useState('');
             const [nuevoParamTipo, setNuevoParamTipo] = React.useState('ASESOR');
@@ -1205,7 +1460,7 @@
                 setIsLoading(false);
             };
 
-            // UI COMPONENTES REUTILIZABLES
+            // UI AUXILIARES
             const BadgeEstado = ({estado}) => {
                 const colors = {
                     'ACTIVO': 'bg-green-100 text-green-700',
@@ -1222,7 +1477,7 @@
                 <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4 modal-bg no-print">
                     <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden flex flex-col max-h-[85vh]">
                         <div className="p-4 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
-                            <div><h3 className="font-bold text-slate-800">Historial Inalterable</h3><p className="text-xs text-slate-500">{exp.cliente} | ID: {exp.id}</p></div>
+                            <div><h3 className="font-bold text-slate-800">Historial Inalterable</h3><p className="text-xs text-slate-500">{exp.cliente} | Exp: {exp.id} ({formatearConCeros(exp.id)})</p></div>
                             <button onClick={onClose} className="text-slate-400 hover:text-red-500 p-2"><i className="fa-solid fa-xmark fa-xl"></i></button>
                         </div>
                         <div className="p-6 overflow-y-auto flex-1 space-y-4">
@@ -1239,8 +1494,34 @@
                 </div>
             );
 
+            // MODAL TUTORIAL (i) PARA NUEVOS USUARIOS
+            const ModalAyudaTutorial = ({ info, onClose }) => (
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 modal-bg no-print">
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border-t-4 border-blue-600">
+                        <div className="p-4 bg-blue-50 border-b border-blue-100 flex justify-between items-center">
+                            <div className="flex items-center gap-2">
+                                <span className="w-7 h-7 rounded-full bg-blue-600 text-white flex items-center justify-center font-black text-xs">i</span>
+                                <h3 className="font-black text-slate-800 text-sm uppercase">{info.title}</h3>
+                            </div>
+                            <button onClick={onClose} className="text-slate-400 hover:text-red-500 p-1"><i className="fa-solid fa-xmark fa-lg"></i></button>
+                        </div>
+                        <div className="p-5 space-y-3 text-xs text-slate-700 leading-relaxed">
+                            {info.steps.map((st, idx) => (
+                                <div key={idx} className="flex gap-2.5 items-start bg-slate-50 p-3 rounded-xl border border-slate-200">
+                                    <span className="bg-[#59B447] text-white font-black w-5 h-5 rounded-full flex items-center justify-center shrink-0 text-[10px]">{idx + 1}</span>
+                                    <p className="font-medium">{st}</p>
+                                </div>
+                            ))}
+                        </div>
+                        <div className="p-3 bg-slate-50 border-t text-right">
+                            <button onClick={onClose} className="bg-slate-800 text-white font-bold px-5 py-2 rounded-xl text-xs">Entendido</button>
+                        </div>
+                    </div>
+                </div>
+            );
+
             // =====================================================================
-            // PANTALLA DE LOGIN (SIN SELECCIÓN DE SEDE + BOTÓN RECORDAR CONTRASEÑA)
+            // PANTALLA DE LOGIN
             // =====================================================================
             if (!isAuth) {
                 return (
@@ -1256,7 +1537,7 @@
                                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 240"><g fill="#59B447"><rect x="90" y="8" width="24" height="13" rx="6.5"/><rect x="71" y="31" width="61" height="13" rx="6.5"/><rect x="50" y="55" width="74" height="13" rx="6.5"/><rect x="31" y="79" width="75" height="13" rx="6.5"/><rect x="24" y="103" width="63" height="13" rx="6.5"/><path d="M143 55 C141 78 130 95 111 107 C96 117 81 122 72 134 C62 147 63 166 70 181 C76 195 87 208 97 216 C107 201 118 189 131 177 C144 166 157 156 164 141 C173 123 173 104 168 89 C164 74 156 62 143 55 Z"/></g></svg>
                             </div>
                             <h1 className="text-[#59B447] font-bold text-3xl tracking-widest mb-1" style={{ fontFamily: "Georgia" }}>CREDIBAN</h1>
-                            <p className="text-slate-400 text-xs tracking-wider uppercase mb-2">Control de Expedientes & QR (V20.1)</p>
+                            <p className="text-slate-400 text-xs tracking-wider uppercase mb-2">Control de Expedientes & QR (V21)</p>
                             <div className="inline-flex items-center gap-1.5 bg-slate-800/80 border border-slate-700 text-slate-300 text-[10px] font-bold px-3 py-1 rounded-full mb-6">
                                 <i className="fa-solid fa-shield-halved text-[#59B447]"></i>
                                 Acceso exclusivo: Cajeros • Administradores • Gerentes
@@ -1273,14 +1554,7 @@
                                     <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5 ml-1">Usuario</label>
                                     <div className="relative">
                                         <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-500"><i className="fa-solid fa-user-lock"></i></div>
-                                        <input
-                                            type="text"
-                                            required
-                                            value={usuarioInput}
-                                            onChange={e=>setUsuarioInput(e.target.value)}
-                                            className="w-full pl-12 p-3.5 bg-slate-900/50 border border-slate-700/50 rounded-2xl focus:ring-2 focus:ring-[#59B447] outline-none text-white font-bold uppercase"
-                                            placeholder="Ej. NOMBRE.A"
-                                        />
+                                        <input type="text" required value={usuarioInput} onChange={e=>setUsuarioInput(e.target.value)} className="w-full pl-12 p-3.5 bg-slate-900/50 border border-slate-700/50 rounded-2xl focus:ring-2 focus:ring-[#59B447] outline-none text-white font-bold uppercase" placeholder="Ej. NOMBRE.A" />
                                     </div>
                                 </div>
 
@@ -1288,33 +1562,16 @@
                                     <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5 ml-1">Contraseña</label>
                                     <div className="relative">
                                         <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-500"><i className="fa-solid fa-lock"></i></div>
-                                        <input
-                                            type={showPassLogin ? "text" : "password"}
-                                            required
-                                            value={passwordInput}
-                                            onChange={e=>setPasswordInput(e.target.value)}
-                                            className="w-full pl-12 pr-12 p-3.5 bg-slate-900/50 border border-slate-700/50 rounded-2xl focus:ring-2 focus:ring-[#59B447] outline-none text-white font-mono tracking-widest"
-                                            placeholder="••••••••"
-                                        />
-                                        <button
-                                            type="button"
-                                            onClick={() => setShowPassLogin(!showPassLogin)}
-                                            className="absolute inset-y-0 right-0 pr-4 flex items-center text-slate-400 hover:text-white"
-                                        >
+                                        <input type={showPassLogin ? "text" : "password"} required value={passwordInput} onChange={e=>setPasswordInput(e.target.value)} className="w-full pl-12 pr-12 p-3.5 bg-slate-900/50 border border-slate-700/50 rounded-2xl focus:ring-2 focus:ring-[#59B447] outline-none text-white font-mono tracking-widest" placeholder="••••••••" />
+                                        <button type="button" onClick={() => setShowPassLogin(!showPassLogin)} className="absolute inset-y-0 right-0 pr-4 flex items-center text-slate-400 hover:text-white">
                                             <i className={`fa-solid ${showPassLogin ? 'fa-eye-slash' : 'fa-eye'}`}></i>
                                         </button>
                                     </div>
                                 </div>
 
-                                {/* Botón / Casilla de Recordar Contraseña */}
                                 <div className="flex items-center justify-between px-1 pt-1">
                                     <label className="flex items-center gap-2.5 cursor-pointer select-none">
-                                        <input
-                                            type="checkbox"
-                                            checked={rememberPass}
-                                            onChange={e => setRememberPass(e.target.checked)}
-                                            className="w-4 h-4 rounded accent-[#59B447] cursor-pointer"
-                                        />
+                                        <input type="checkbox" checked={rememberPass} onChange={e => setRememberPass(e.target.checked)} className="w-4 h-4 rounded accent-[#59B447] cursor-pointer" />
                                         <span className="text-xs font-bold text-slate-300">Recordar usuario y contraseña</span>
                                     </label>
                                 </div>
@@ -1342,6 +1599,7 @@
                         </div>
                     )}
 
+                    {helpModal && <ModalAyudaTutorial info={helpModal} onClose={() => setHelpModal(null)} />}
                     {historialVisible && <ModalHistorial exp={historialVisible} onClose={() => setHistorialVisible(null)} />}
                     {puedeOperarCaja && <input type="file" accept=".csv" className="hidden no-print" ref={csvInputRef} onChange={importarCSV} />}
 
@@ -1442,16 +1700,27 @@
 
                     <main className="p-4 max-w-7xl mx-auto w-full flex-1 mt-2">
                         {/* ===================================================================== */}
-                        {/* 1. ESCÁNER QR RÁFAGA Y TABLA MULTICAJERO EN VIVO                      */}
+                        {/* 1. ESCÁNER QR RÁFAGA + INSPECTOR DE BLOQUES DE ESTANTE (1 AL 50, ETC) */}
                         {/* ===================================================================== */}
                         {view === 'escaner' && puedeOperarCaja && (
                             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 animate-fade-in no-print">
                                 <div className="lg:col-span-5 space-y-4">
                                     <div className="glass-card p-5 rounded-2xl border-t-4 border-[#59B447]">
                                         <div className="flex justify-between items-center mb-3">
-                                            <h2 className="font-black text-slate-800 text-base uppercase"><i className="fa-solid fa-bolt text-[#59B447] mr-1"></i> Escáner QR Modo Ráfaga</h2>
+                                            <div className="flex items-center">
+                                                <h2 className="font-black text-slate-800 text-base uppercase"><i className="fa-solid fa-bolt text-[#59B447] mr-1"></i> Escáner QR Ráfaga</h2>
+                                                <HelpButton
+                                                    title="Cómo usar el Escáner QR en Ráfaga"
+                                                    steps={[
+                                                        "Elige arriba el modo: '1. INVENTARIO' (para contar carpetas en el estante), '2. RETORNO CAJA' (cuando el asesor devuelve carpetas) o '3. SALIDA LOTE' (para prestar varias carpetas a un asesor).",
+                                                        "El lector reconoce automáticamente tanto números naturales (ej. 7) como códigos con ceros (ej. 001-00007).",
+                                                        "Escucharás un sonido fuerte de caja registradora al registrar con éxito y una alarma grave si un expediente no existe o se repite."
+                                                    ]}
+                                                    onOpen={setHelpModal}
+                                                />
+                                            </div>
                                             <span className="text-[11px] font-bold bg-slate-100 px-2.5 py-1 rounded-full text-slate-700">
-                                                Contabilizados: <span className="text-[#59B447] font-black">{totalContabilizadosHoy} / {expedientes.length}</span>
+                                                Total Hoy: <span className="text-[#59B447] font-black">{totalContabilizadosHoy} / {expedientes.length}</span>
                                             </span>
                                         </div>
 
@@ -1480,7 +1749,6 @@
                                             </div>
                                         )}
 
-                                        {/* Selector de Lente de Cámara si el celular tiene varias cámaras */}
                                         {camerasList.length > 1 && (
                                             <div className="mb-3 flex items-center gap-2">
                                                 <i className="fa-solid fa-camera-rotate text-slate-400 text-xs"></i>
@@ -1491,13 +1759,13 @@
                                             </div>
                                         )}
 
-                                        <div className="bg-slate-900 rounded-2xl overflow-hidden relative min-h-[260px] flex flex-col items-center justify-center border-2 border-slate-800">
+                                        <div className="bg-slate-900 rounded-2xl overflow-hidden relative min-h-[250px] flex flex-col items-center justify-center border-2 border-slate-800">
                                             <div id="qr-reader-box" className="w-full"></div>
                                             {!cameraActive && (
                                                 <div className="p-8 text-center">
                                                     <i className="fa-solid fa-camera text-4xl text-slate-500 mb-3"></i>
                                                     <p className="text-xs text-slate-300 mb-4">Enfoca los códigos QR de corrido sin tocar botones.</p>
-                                                    <button onClick={() => setCameraActive(true)} className="bg-[#59B447] text-white font-black px-6 py-3 rounded-xl shadow-lg hover:bg-green-600 text-sm">
+                                                    <button onClick={() => { getAudioContext(); setCameraActive(true); }} className="bg-[#59B447] text-white font-black px-6 py-3 rounded-xl shadow-lg hover:bg-green-600 text-sm">
                                                         <i className="fa-solid fa-play mr-2"></i> Encender Cámara Ráfaga
                                                     </button>
                                                 </div>
@@ -1516,7 +1784,7 @@
                                         )}
 
                                         <form onSubmit={(e) => { e.preventDefault(); procesarLecturaQR(lectorFisicoInput); setLectorFisicoInput(''); }} className="mt-4 flex gap-2">
-                                            <input type="text" value={lectorFisicoInput} onChange={e => setLectorFisicoInput(e.target.value)} placeholder="O usa pistola lectora USB / digita N° Exp y Enter..." className="flex-1 p-2.5 border border-slate-300 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#59B447]" />
+                                            <input type="text" value={lectorFisicoInput} onChange={e => setLectorFisicoInput(e.target.value)} placeholder="Pistola USB o digita N° Exp (ej. 7 o 001-00007) y Enter..." className="flex-1 p-2.5 border border-slate-300 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#59B447]" />
                                             <button type="submit" className="bg-slate-800 text-white px-4 rounded-xl text-xs font-bold">Pasar</button>
                                         </form>
 
@@ -1525,10 +1793,28 @@
                                                 scanFeedback.type === 'success' ? 'bg-green-50 border-green-600 text-green-900' :
                                                 scanFeedback.type === 'warning' ? 'bg-amber-50 border-amber-500 text-amber-900' :
                                                 scanFeedback.type === 'danger_ok' ? 'bg-red-600 border-red-900 text-white' :
-                                                'bg-red-50 border-red-600 text-red-900'
+                                                'bg-red-100 border-red-700 text-red-950'
                                             }`}>
                                                 <p className="font-black text-sm">{scanFeedback.title}</p>
-                                                <p className="text-xs mt-1 font-semibold opacity-90">{scanFeedback.subtitle}</p>
+                                                <p className="text-xs mt-1 font-semibold opacity-95">{scanFeedback.subtitle}</p>
+                                            </div>
+                                        )}
+
+                                        {/* Bitácora de Alertas / Errores recientes para que no se escape ninguno al escanear rápido */}
+                                        {alertasEscaneo.length > 0 && (
+                                            <div className="mt-3 bg-red-50 border border-red-200 rounded-xl p-3">
+                                                <div className="flex justify-between items-center mb-1.5">
+                                                    <span className="text-[10px] font-black text-red-800 uppercase"><i className="fa-solid fa-triangle-exclamation mr-1"></i> Alertas / Duplicados en Ráfaga ({alertasEscaneo.length})</span>
+                                                    <button onClick={() => setAlertasEscaneo([])} className="text-[10px] text-red-600 font-bold underline">Limpiar</button>
+                                                </div>
+                                                <div className="max-h-24 overflow-y-auto space-y-1">
+                                                    {alertasEscaneo.map((al, i) => (
+                                                        <div key={i} className="text-[10px] bg-white p-1.5 rounded border border-red-100 flex justify-between">
+                                                            <span className="font-black text-red-700">{al.titulo}: <span className="font-semibold text-slate-700">{al.detalle}</span></span>
+                                                            <span className="text-slate-400 ml-2">{al.hora.split(', ')[1]}</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
                                             </div>
                                         )}
 
@@ -1543,14 +1829,23 @@
                                     </div>
                                 </div>
 
-                                <div className="lg:col-span-7 glass-card p-5 rounded-2xl flex flex-col h-[720px]">
-                                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-4 border-b pb-3">
-                                        <div>
+                                {/* COLUMNA DERECHA: TABLA EN VIVO + BUSCADOR DE NOMBRE + INSPECTOR DE BLOQUES (1 AL 50) */}
+                                <div className="lg:col-span-7 glass-card p-5 rounded-2xl flex flex-col h-[780px]">
+                                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-3 border-b pb-3">
+                                        <div className="flex items-center">
                                             <h3 className="font-bold text-slate-800 text-base">
                                                 <i className="fa-solid fa-tower-broadcast text-[#59B447] mr-2"></i>
-                                                Tabla de Inventario en Vivo Multicajero ({sedeActual})
+                                                Tabla en Vivo & Control por Bloques ({sedeActual})
                                             </h3>
-                                            <p className="text-[11px] text-slate-500">Se actualiza sola cada 3 segundos entre los cajeros conectados a la sede.</p>
+                                            <HelpButton
+                                                title="Cómo revisar por Bloques de Estante (Ej. 1 al 50)"
+                                                steps={[
+                                                    "Cada sede divide sus estantes de forma distinta (de 50 en 50, de 100 en 100 o rangos personalizados). Toca cualquier bloque (ej. '1 - 50') o escribe el rango 'Desde / Hasta'.",
+                                                    "El sistema te dirá al instante si ese bloque está COMPLETO (verde) o cuántos expedientes faltan escanear en esa división.",
+                                                    "Activa el botón 'Ver Solo Faltantes' para ver únicamente las carpetas que aún no han sido escaneadas en ese bloque y evitar que se te pase alguna."
+                                                ]}
+                                                onOpen={setHelpModal}
+                                            />
                                         </div>
                                         <div className="flex gap-1.5">
                                             <span className="bg-green-100 text-green-800 text-[11px] font-black px-3 py-1 rounded-lg">
@@ -1559,6 +1854,96 @@
                                             <span className="bg-amber-100 text-amber-800 text-[11px] font-black px-3 py-1 rounded-lg">
                                                 Faltan: {expedientes.length - totalContabilizadosHoy}
                                             </span>
+                                        </div>
+                                    </div>
+
+                                    {/* PANEL DE CONTROL POR BLOQUES DE ESTANTE (1 AL 50, 51 AL 100, PERSONALIZADO) */}
+                                    <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 mb-3 space-y-2.5">
+                                        <div className="flex flex-wrap items-center justify-between gap-2">
+                                            <div className="flex items-center gap-1.5">
+                                                <span className="text-[10px] font-black text-slate-600 uppercase"><i className="fa-solid fa-layer-group text-[#59B447] mr-1"></i> Bloques de Estante:</span>
+                                                <select value={bloqueTamano} onChange={e => setBloqueTamano(parseInt(e.target.value, 10))} className="text-[10px] font-bold bg-white border border-slate-300 rounded px-2 py-1">
+                                                    <option value={25}>De 25 en 25</option>
+                                                    <option value={50}>De 50 en 50</option>
+                                                    <option value={100}>De 100 en 100</option>
+                                                </select>
+                                            </div>
+
+                                            <div className="flex items-center gap-1.5">
+                                                <input type="number" placeholder="Desde (1)" value={bloqueDesde} onChange={e => setBloqueDesde(e.target.value)} className="w-20 p-1.5 border border-slate-300 rounded-lg text-xs font-bold bg-white text-center" />
+                                                <span className="text-xs font-bold text-slate-400">al</span>
+                                                <input type="number" placeholder="Hasta (50)" value={bloqueHasta} onChange={e => setBloqueHasta(e.target.value)} className="w-20 p-1.5 border border-slate-300 rounded-lg text-xs font-bold bg-white text-center" />
+                                                {(bloqueDesde !== '' || bloqueHasta !== '') && (
+                                                    <button onClick={() => { setBloqueDesde(''); setBloqueHasta(''); setSoloFaltantesBloque(false); }} className="bg-slate-200 text-slate-700 px-2 py-1.5 rounded-lg text-[10px] font-bold hover:bg-slate-300">
+                                                        Ver Todos
+                                                    </button>
+                                                )}
+                                            </div>
+                                        </div>
+
+                                        {/* Botones rápidos de Bloques (1-50, 51-100, 101-150...) con indicador verde si están completos */}
+                                        <div className="flex gap-1.5 overflow-x-auto pb-1">
+                                            {bloquesPredefinidos.map(b => {
+                                                const activo = parseInt(bloqueDesde, 10) === b.ini && parseInt(bloqueHasta, 10) === b.fin;
+                                                return (
+                                                    <button
+                                                        key={`${b.ini}-${b.fin}`}
+                                                        onClick={() => { setBloqueDesde(String(b.ini)); setBloqueHasta(String(b.fin)); }}
+                                                        className={`px-2.5 py-1.5 rounded-lg text-[10px] font-black whitespace-nowrap border transition-all flex items-center gap-1.5 ${
+                                                            activo ? 'bg-slate-800 text-white border-slate-900 shadow' :
+                                                            b.completo ? 'bg-green-100 text-green-800 border-green-300' :
+                                                            b.total === 0 ? 'bg-slate-100 text-slate-400 border-slate-200' :
+                                                            'bg-white text-slate-700 border-slate-300 hover:bg-blue-50'
+                                                        }`}
+                                                    >
+                                                        <span>{b.ini}-{b.fin}</span>
+                                                        <span className={`px-1.5 py-0.2 rounded text-[9px] ${b.completo ? 'bg-green-600 text-white' : 'bg-slate-200 text-slate-700'}`}>
+                                                            {b.listos}/{b.total}
+                                                        </span>
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+
+                                        {/* Barra de Estado del Bloque Seleccionado (ej. Del 1 al 50) */}
+                                        {resumenBloqueActivo && (
+                                            <div className={`p-2.5 rounded-xl border text-xs flex flex-col gap-1 ${resumenBloqueActivo.completo ? 'bg-green-100 border-green-400 text-green-900' : 'bg-amber-50 border-amber-300 text-amber-900'}`}>
+                                                <div className="flex justify-between items-center">
+                                                    <span className="font-black">
+                                                        {resumenBloqueActivo.completo
+                                                            ? `✅ BLOQUE ${resumenBloqueActivo.desde} AL ${resumenBloqueActivo.hasta} COMPLETO (${resumenBloqueActivo.escaneadosCount}/${resumenBloqueActivo.totalRegistrados})`
+                                                            : `📦 Bloque ${resumenBloqueActivo.desde} al ${resumenBloqueActivo.hasta}: ${resumenBloqueActivo.escaneadosCount} de ${resumenBloqueActivo.totalRegistrados} verificados (Faltan ${resumenBloqueActivo.pendientesCount})`}
+                                                    </span>
+                                                    <button
+                                                        onClick={() => setSoloFaltantesBloque(!soloFaltantesBloque)}
+                                                        className={`px-2.5 py-1 rounded-lg text-[10px] font-black ${soloFaltantesBloque ? 'bg-red-600 text-white' : 'bg-white text-slate-800 border border-slate-300'}`}
+                                                    >
+                                                        {soloFaltantesBloque ? 'Mostrando Solo Faltantes' : 'Filtrar Faltantes'}
+                                                    </button>
+                                                </div>
+                                                {resumenBloqueActivo.pendientesCount > 0 && (
+                                                    <p className="text-[10px] font-bold text-red-700 truncate">
+                                                        Faltan escanear en este bloque: {resumenBloqueActivo.listaPendientes.slice(0, 10).join(', ')}{resumenBloqueActivo.listaPendientes.length > 10 ? '...' : ''}
+                                                    </p>
+                                                )}
+                                            </div>
+                                        )}
+
+                                        {/* Buscador en Vivo por Nombre o N° dentro de la Tabla de Inventario */}
+                                        <div className="relative">
+                                            <i className="fa-solid fa-magnifying-glass absolute left-3 top-2.5 text-slate-400 text-xs"></i>
+                                            <input
+                                                type="text"
+                                                value={liveTableSearch}
+                                                onChange={e => setLiveTableSearch(e.target.value)}
+                                                placeholder="Buscar cliente por nombre o N° de expediente en la tabla en vivo..."
+                                                className="w-full pl-8 pr-8 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#59B447]"
+                                            />
+                                            {liveTableSearch && (
+                                                <button onClick={() => setLiveTableSearch('')} className="absolute right-3 top-2 text-slate-400 hover:text-slate-700">
+                                                    <i className="fa-solid fa-xmark"></i>
+                                                </button>
+                                            )}
                                         </div>
                                     </div>
 
@@ -1573,13 +1958,15 @@
                                                 </tr>
                                             </thead>
                                             <tbody>
-                                                {expedientes.map(e => {
+                                                {expedientesTablaVivo.map(e => {
                                                     const yaRegistrado = e.invSesion === hoySesionId && e.invFecha;
                                                     return (
                                                         <tr key={e.id} className={`border-b transition-colors ${yaRegistrado ? 'bg-green-50/60' : 'hover:bg-slate-50'}`}>
                                                             <td className="p-3">
                                                                 <p className="font-bold text-slate-800 text-xs">{e.cliente}</p>
-                                                                <p className="text-[11px] text-blue-600 font-black">ID: {e.id}</p>
+                                                                <p className="text-[11px] text-blue-600 font-black">
+                                                                    Exp: {normalizarIdNatural(e.id)} <span className="text-slate-400 font-semibold">({formatearConCeros(e.id)})</span>
+                                                                </p>
                                                             </td>
                                                             <td className="p-3">
                                                                 {yaRegistrado ? (
@@ -1610,7 +1997,7 @@
                                                         </tr>
                                                     );
                                                 })}
-                                                {expedientes.length === 0 && <tr><td colSpan="4" className="text-center p-8 text-slate-400">Sin expedientes registrados en esta sede.</td></tr>}
+                                                {expedientesTablaVivo.length === 0 && <tr><td colSpan="4" className="text-center p-8 text-slate-400">No hay expedientes en este filtro o bloque.</td></tr>}
                                             </tbody>
                                         </table>
                                     </div>
@@ -1623,16 +2010,27 @@
                         {/* ===================================================================== */}
                         {view === 'movimientos' && puedeOperarCaja && (
                             <div className="max-w-2xl mx-auto animate-fade-in no-print">
-                                <h2 className="text-xl font-bold text-slate-800 mb-4">Registro Manual de Salidas y Retornos</h2>
+                                <div className="flex items-center mb-4">
+                                    <h2 className="text-xl font-bold text-slate-800">Registro Manual de Salidas y Retornos</h2>
+                                    <HelpButton
+                                        title="Cómo prestar o devolver un expediente sin QR"
+                                        steps={[
+                                            "Escribe el número natural del expediente (ej. 7), el código completo (001-00007) o parte del nombre del cliente.",
+                                            "Toca el cliente en la lista desplegable.",
+                                            "Si está en CAJA, elige al asesor y presiona 'Registrar Salida'. Si ya estaba prestado a un asesor, presiona 'Retornar a Caja Central'."
+                                        ]}
+                                        onOpen={setHelpModal}
+                                    />
+                                </div>
                                 <div className="glass-card p-6 rounded-2xl mb-6 border-l-4 border-blue-500 relative z-20">
                                     <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Buscar Cliente (Nombre o N° Exp)</label>
                                     <div className="relative">
-                                        <input type="text" value={movBusqueda} onChange={handleLiveSearch} className="w-full p-3 border border-blue-200 rounded-xl outline-none font-bold bg-white text-blue-900 shadow-inner focus:ring-2 focus:ring-blue-400" placeholder="Ej: CARLOS o 45..." />
+                                        <input type="text" value={movBusqueda} onChange={handleLiveSearch} className="w-full p-3 border border-blue-200 rounded-xl outline-none font-bold bg-white text-blue-900 shadow-inner focus:ring-2 focus:ring-blue-400" placeholder="Ej: CARLOS o 7..." />
                                         {sugerencias.length > 0 && (
                                             <div className="absolute top-full left-0 right-0 mt-2 bg-white border border-slate-200 rounded-xl shadow-2xl overflow-hidden z-30">
                                                 {sugerencias.map(s => (
                                                     <div key={s.id} onClick={() => seleccionarExpediente(s)} className="p-3 border-b border-slate-50 hover:bg-blue-50 cursor-pointer flex justify-between items-center transition-colors">
-                                                        <div><p className="font-bold text-sm text-slate-800">{s.cliente}</p><p className="text-[10px] text-slate-500">EXP: <span className="text-blue-600 font-bold">{s.id}</span> | Titular: {s.asesorTitular}</p></div>
+                                                        <div><p className="font-bold text-sm text-slate-800">{s.cliente}</p><p className="text-[10px] text-slate-500">EXP: <span className="text-blue-600 font-bold">{s.id} ({formatearConCeros(s.id)})</span> | Titular: {s.asesorTitular}</p></div>
                                                         <i className="fa-solid fa-chevron-right text-slate-300"></i>
                                                     </div>
                                                 ))}
@@ -1645,7 +2043,7 @@
                                     <div className="glass-card p-6 rounded-2xl border-l-4 border-[#59B447] animate-fade-in z-10">
                                         <div className="mb-4 pb-4 border-b border-slate-100 flex justify-between items-start">
                                             <div>
-                                                <p className="text-xs text-slate-400 font-bold uppercase">Expediente N°: <span className="text-slate-800 text-base">{expEncontrado.id}</span></p>
+                                                <p className="text-xs text-slate-400 font-bold uppercase">Expediente N°: <span className="text-slate-800 text-base">{expEncontrado.id} ({formatearConCeros(expEncontrado.id)})</span></p>
                                                 <p className="text-xl font-bold text-slate-800 uppercase mt-1">{expEncontrado.cliente}</p>
                                                 <div className="flex gap-2 mt-2 items-center flex-wrap">
                                                     <BadgeEstado estado={expEncontrado.estadoCredito} />
@@ -1704,7 +2102,7 @@
                                                 type="text"
                                                 value={dashSearchQuery}
                                                 onChange={e => setDashSearchQuery(e.target.value)}
-                                                placeholder={`Buscar en ${sedeActual} por N° de Expediente (ej. 124) o Nombre del Cliente...`}
+                                                placeholder={`Buscar en ${sedeActual} por N° de Expediente (ej. 7 o 001-00007) o Nombre del Cliente...`}
                                                 className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#59B447]"
                                             />
                                         </div>
@@ -1794,7 +2192,9 @@
                                             <tbody>
                                                 {listaDash.map(e => (
                                                     <tr key={e.id} className="border-b hover:bg-slate-50">
-                                                        <td className="p-3 font-black text-blue-600 text-xs">{e.id}</td>
+                                                        <td className="p-3 font-black text-blue-600 text-xs">
+                                                            {normalizarIdNatural(e.id)} <span className="text-slate-400 font-normal">({formatearConCeros(e.id)})</span>
+                                                        </td>
                                                         <td className="p-3 font-bold text-slate-800 text-xs">{e.cliente}</td>
                                                         <td className="p-3">
                                                             <BadgeEstado estado={e.estadoCredito} />
@@ -1827,16 +2227,33 @@
                         )}
 
                         {/* ===================================================================== */}
-                        {/* 4. REGISTRO DE EXPEDIENTES Y EDICIÓN TOTAL                            */}
+                        {/* 4. REGISTRO DE EXPEDIENTES Y CARGA CSV CON BOTONES TUTORIALES (i)     */}
                         {/* ===================================================================== */}
                         {view === 'inventario' && puedeOperarCaja && (
                             <div className="grid grid-cols-1 xl:grid-cols-4 gap-6 animate-fade-in no-print">
                                 <div className="xl:col-span-1 space-y-6">
                                     <div className="glass-card p-5 rounded-2xl h-fit border-t-4 border-[#59B447]">
-                                        <h3 className="font-bold text-slate-800 mb-4 border-b pb-2">Registrar Nuevo Expediente</h3>
+                                        <div className="flex items-center justify-between mb-4 border-b pb-2">
+                                            <h3 className="font-bold text-slate-800">Registrar Nuevo Expediente</h3>
+                                            <HelpButton
+                                                title="Cómo registrar un expediente individual"
+                                                steps={[
+                                                    "N° Expediente: Escribe únicamente el número natural (ej. 7 o 125). El sistema lo vincula automáticamente con su formato QR 001-00007.",
+                                                    "Nombre del Cliente: Escribe Apellidos y Nombres completos (sin necesidad de DNI, el sistema rellena el DNI como 'NO IDENTIFICADO').",
+                                                    "Deja marcada la casilla 'Añadir Ticket QR' para que se agregue directo a tu hoja de impresión A4."
+                                                ]}
+                                                onOpen={setHelpModal}
+                                            />
+                                        </div>
                                         <form onSubmit={registrarExpediente} className="space-y-3">
-                                            <div><label className="text-[10px] font-bold text-slate-500 uppercase">N° Expediente</label><input type="text" required value={formInv.idExp} onChange={e=>setFormInv({...formInv, idExp: e.target.value.replace(/\D/g, '')})} placeholder="Ej. 125" className="w-full p-2 border rounded bg-white text-sm font-bold shadow-inner focus:ring-2 focus:ring-[#59B447] outline-none" /></div>
-                                            <div><label className="text-[10px] font-bold text-slate-500 uppercase">Nombre del Cliente</label><input type="text" required value={formInv.cliente} onChange={e=>setFormInv({...formInv, cliente: e.target.value})} className="w-full p-2 border rounded bg-white text-sm uppercase" /></div>
+                                            <div>
+                                                <label className="text-[10px] font-bold text-slate-500 uppercase">N° Expediente (Número Natural)</label>
+                                                <input type="text" required value={formInv.idExp} onChange={e=>setFormInv({...formInv, idExp: e.target.value.replace(/\D/g, '')})} placeholder="Ej. 7 o 125" className="w-full p-2 border rounded bg-white text-sm font-bold shadow-inner focus:ring-2 focus:ring-[#59B447] outline-none" />
+                                            </div>
+                                            <div>
+                                                <label className="text-[10px] font-bold text-slate-500 uppercase">Nombre Completo del Cliente</label>
+                                                <input type="text" required value={formInv.cliente} onChange={e=>setFormInv({...formInv, cliente: e.target.value})} placeholder="Ej. ROMERO TENA JUAN" className="w-full p-2 border rounded bg-white text-sm uppercase" />
+                                            </div>
                                             <div>
                                                 <label className="text-[10px] font-bold text-slate-500 uppercase">Estado / Categorización</label>
                                                 <select value={formInv.estadoCredito} onChange={e=>setFormInv({...formInv, estadoCredito: e.target.value})} className="w-full p-2 border rounded bg-white text-sm font-semibold text-slate-700">
@@ -1864,8 +2281,19 @@
 
                                     {esGerente && (
                                         <div className="bg-orange-50 border border-orange-200 p-5 rounded-2xl shadow-sm">
-                                            <h3 className="font-bold text-orange-800 mb-2"><i className="fa-solid fa-cloud-arrow-up"></i> Carga Masiva CSV (Gerencia)</h3>
-                                            <p className="text-[10px] text-orange-700 mb-3">Importa lotes de expedientes en formato CSV directamente a la filial {sedeActual}.</p>
+                                            <div className="flex items-center justify-between mb-2">
+                                                <h3 className="font-bold text-orange-800 text-sm"><i className="fa-solid fa-cloud-arrow-up mr-1"></i> Carga Masiva CSV</h3>
+                                                <HelpButton
+                                                    title="Formato para subir archivo Excel (CSV)"
+                                                    steps={[
+                                                        "En Excel, ordena tus columnas así: Columna A: N° Expediente (ej. 1, 2, 3), Columna B: DNI (puedes dejarlo vacío, el sistema pondrá NO IDENTIFICADO), Columna C: Nombre del Cliente, Columna D: Estado (ACTIVO), Columna E: Asesor Titular.",
+                                                        "También acepta archivos de 4 columnas sin columna DNI (ID, Cliente, Estado, Asesor).",
+                                                        "Guarda el Excel como 'CSV (delimitado por comas)' y súbelo con el botón naranja."
+                                                    ]}
+                                                    onOpen={setHelpModal}
+                                                />
+                                            </div>
+                                            <p className="text-[10px] text-orange-700 mb-3">Rellena automáticamente el DNI como «NO IDENTIFICADO» y acepta números naturales.</p>
                                             <button onClick={() => csvInputRef.current.click()} className="w-full bg-orange-500 text-white py-2 rounded-lg font-bold shadow hover:bg-orange-600 text-xs">Seleccionar Archivo CSV</button>
                                         </div>
                                     )}
@@ -1883,7 +2311,7 @@
                                             </thead>
                                             <tbody>
                                                 {expedientes.map(e => {
-                                                    const isEditing = puedeEditarBase && editMode && editMode.id === e.id;
+                                                    const isEditing = puedeEditarBase && editMode && normalizarIdNatural(editMode.id) === normalizarIdNatural(e.id);
                                                     return (
                                                     <tr key={e.id} className="border-b hover:bg-slate-50">
                                                         <td className="p-3">
@@ -1892,7 +2320,9 @@
                                                             ) : (
                                                                 <p className="font-bold text-slate-800 text-xs">{e.cliente}</p>
                                                             )}
-                                                            <p className="text-[10px] text-blue-600 font-black">Exp: {e.id}</p>
+                                                            <p className="text-[10px] text-blue-600 font-black">
+                                                                Exp: {normalizarIdNatural(e.id)} <span className="text-slate-400 font-normal">({formatearConCeros(e.id)} • DNI: NO IDENTIFICADO)</span>
+                                                            </p>
                                                         </td>
                                                         <td className="p-3">
                                                             {isEditing ? (
@@ -1963,17 +2393,26 @@
                         )}
 
                         {/* ===================================================================== */}
-                        {/* 5. GENERADOR MASIVO DE TICKETS QR + PANEL PERSONALIZADOR DE DISEÑO    */}
+                        {/* 5. GENERADOR MASIVO DE TICKETS QR + DESCARGA PDF A4 SIN DESCUADRES    */}
                         {/* ===================================================================== */}
                         {view === 'tickets' && puedeOperarCaja && (
                             <div className="animate-fade-in">
-                                {/* Carga de Tickets */}
                                 <div className="no-print grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
                                     <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
-                                        <h3 className="font-bold text-slate-800 text-sm mb-2"><i className="fa-solid fa-database text-[#59B447] mr-1"></i> 1. Generar Cientos desde Base ({expedientes.length})</h3>
+                                        <div className="flex items-center justify-between mb-2">
+                                            <h3 className="font-bold text-slate-800 text-sm"><i className="fa-solid fa-database text-[#59B447] mr-1"></i> 1. Generar desde Base ({expedientes.length})</h3>
+                                            <HelpButton
+                                                title="Generar etiquetas desde la Base de Datos"
+                                                steps={[
+                                                    "Escribe el rango de números naturales (ej. Desde 1 Hasta 50) y toca 'Cargar Rango', o toca 'Cargar Todos' para armar las hojas de toda la sede.",
+                                                    "Cada hoja A4 acomoda exactamente 24 etiquetas (4 columnas x 6 filas)."
+                                                ]}
+                                                onOpen={setHelpModal}
+                                            />
+                                        </div>
                                         <div className="flex gap-2 mb-2">
                                             <input type="text" placeholder="Desde Exp (Ej. 1)" value={rangoDesde} onChange={e=>setRangoDesde(e.target.value)} className="w-1/2 p-2 border rounded-lg text-xs font-bold" />
-                                            <input type="text" placeholder="Hasta Exp (Ej. 300)" value={rangoHasta} onChange={e=>setRangoHasta(e.target.value)} className="w-1/2 p-2 border rounded-lg text-xs font-bold" />
+                                            <input type="text" placeholder="Hasta Exp (Ej. 50)" value={rangoHasta} onChange={e=>setRangoHasta(e.target.value)} className="w-1/2 p-2 border rounded-lg text-xs font-bold" />
                                         </div>
                                         <div className="flex gap-2">
                                             <button onClick={() => cargarTicketsDesdeBase(true)} className="flex-1 bg-slate-800 text-white py-2 rounded-lg text-xs font-bold hover:bg-slate-700">Cargar Rango</button>
@@ -1982,8 +2421,18 @@
                                     </div>
 
                                     <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
-                                        <h3 className="font-bold text-slate-800 text-sm mb-2"><i className="fa-solid fa-file-excel text-emerald-600 mr-1"></i> 2. Pegado Masivo desde Excel</h3>
-                                        <textarea rows="2" value={excelPasteText} onChange={e=>setExcelPasteText(e.target.value)} placeholder="Pega aquí las columnas N° Exp y Nombre desde Excel..." className="w-full p-2 border rounded-lg text-xs font-mono mb-2"></textarea>
+                                        <div className="flex items-center justify-between mb-2">
+                                            <h3 className="font-bold text-slate-800 text-sm"><i className="fa-solid fa-file-excel text-emerald-600 mr-1"></i> 2. Pegar desde Excel</h3>
+                                            <HelpButton
+                                                title="Cómo pegar cientos de expedientes desde Excel"
+                                                steps={[
+                                                    "Selecciona en tu Excel 2 columnas: N° de Expediente y Nombre del Cliente.",
+                                                    "Copia (Ctrl+C) y pega (Ctrl+V) en este recuadro. El sistema generará todas las etiquetas QR automáticamente."
+                                                ]}
+                                                onOpen={setHelpModal}
+                                            />
+                                        </div>
+                                        <textarea rows="2" value={excelPasteText} onChange={e=>setExcelPasteText(e.target.value)} placeholder="Ejemplo:&#10;1   ROMERO TENA&#10;2   LEYVA RUIZ YISSELA" className="w-full p-2 border rounded-lg text-xs font-mono mb-2"></textarea>
                                         <button onClick={procesarPegadoMasivoExcel} className="w-full bg-emerald-600 text-white py-2 rounded-lg text-xs font-bold hover:bg-emerald-700">Generar Lote QR</button>
                                     </div>
 
@@ -1991,7 +2440,7 @@
                                         <h3 className="font-bold text-slate-800 text-sm mb-2"><i className="fa-solid fa-keyboard text-blue-500 mr-1"></i> 3. Ticket Individual (Reimpresión)</h3>
                                         <form onSubmit={agregarTicketManual} className="space-y-2">
                                             <div className="flex gap-2">
-                                                <input type="text" placeholder="N° Exp (124)" value={manualId} onChange={e=>setManualId(e.target.value.replace(/\D/g, ''))} className="w-1/3 p-2 border rounded-lg text-xs font-bold" required />
+                                                <input type="text" placeholder="N° Exp (7)" value={manualId} onChange={e=>setManualId(e.target.value.replace(/\D/g, ''))} className="w-1/3 p-2 border rounded-lg text-xs font-bold" required />
                                                 <input type="text" placeholder="Nombre Cliente" value={manualCliente} onChange={e=>setManualCliente(e.target.value.toUpperCase())} className="w-2/3 p-2 border rounded-lg text-xs font-bold" required />
                                             </div>
                                             <button type="submit" className="w-full bg-blue-600 text-white py-2 rounded-lg font-bold text-xs hover:bg-blue-700"><i className="fa-solid fa-plus"></i> Añadir a Cola</button>
@@ -1999,155 +2448,106 @@
                                     </div>
                                 </div>
 
-                                {/* PANEL INTERACTIVO DE PERSONALIZACIÓN DE IMPRESIÓN (TAMAÑO QR, POSICIÓN, LETRAS) */}
+                                {/* PANEL PERSONALIZADOR DE IMPRESIÓN */}
                                 <div className="no-print bg-white p-5 rounded-2xl shadow-sm border-2 border-[#59B447]/40 mb-4">
                                     <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 border-b pb-2 gap-2">
                                         <h3 className="font-black text-slate-800 text-sm uppercase">
                                             <i className="fa-solid fa-sliders text-[#59B447] mr-1.5"></i>
-                                            Personalizar Diseño del Ticket, Tamaño de Letra y Ubicación del QR
+                                            Personalizar Diseño del Ticket (Tamaño de Letra, Posición QR y Formato)
                                         </h3>
                                         <button
-                                            onClick={() => setPrintConfig({ qrSize: 84, qrPosition: 'DERECHA', qrDataMode: 'COMPACTO', fontSizeCliente: 0, fontSizeCodigo: 26, ticketHeightMm: 40, showHeaderSede: true })}
+                                            onClick={() => setPrintConfig({ qrSize: 70, qrPosition: 'IZQUIERDA', qrDataMode: 'COMPACTO', formatoCodigoRojo: 'CEROS', fontSizeCliente: 0, fontSizeCodigo: 24, ticketHeightMm: 40, showHeaderSede: true })}
                                             className="text-[11px] bg-slate-100 text-slate-600 px-3 py-1 rounded-lg font-bold hover:bg-slate-200"
                                         >
-                                            <i className="fa-solid fa-rotate-left mr-1"></i> Restaurar Diseño Óptimo
+                                            <i className="fa-solid fa-rotate-left mr-1"></i> Restaurar Diseño Ideal (Imagen 1)
                                         </button>
                                     </div>
 
                                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                                        {/* 1. Ubicación del QR */}
                                         <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
                                             <label className="block text-[10px] font-black text-slate-500 uppercase mb-1.5">1. Ubicación del Código QR</label>
-                                            <select
-                                                value={printConfig.qrPosition}
-                                                onChange={e => setPrintConfig({...printConfig, qrPosition: e.target.value})}
-                                                className="w-full p-2 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-800"
-                                            >
+                                            <select value={printConfig.qrPosition} onChange={e => setPrintConfig({...printConfig, qrPosition: e.target.value})} className="w-full p-2 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-800">
+                                                <option value="IZQUIERDA">QR a la Izquierda + Nombre a la Derecha (Imagen 1)</option>
                                                 <option value="DERECHA">QR a la Derecha + Nombre a la Izquierda</option>
-                                                <option value="IZQUIERDA">QR a la Izquierda + Nombre a la Derecha</option>
                                                 <option value="ARRIBA">QR Centrado Arriba + Nombre Debajo</option>
-                                                <option value="GIGANTE">QR Gigante Central (Prioridad Escáner)</option>
+                                                <option value="GIGANTE">QR Gigante Central</option>
                                             </select>
                                         </div>
 
-                                        {/* 2. Tamaño del QR */}
                                         <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
                                             <div className="flex justify-between text-[10px] font-black text-slate-500 uppercase mb-1.5">
                                                 <span>2. Tamaño del QR</span>
                                                 <span className="text-[#59B447] font-black">{printConfig.qrSize} px</span>
                                             </div>
-                                            <input
-                                                type="range"
-                                                min="55"
-                                                max="115"
-                                                value={printConfig.qrSize}
-                                                onChange={e => setPrintConfig({...printConfig, qrSize: parseInt(e.target.value, 10)})}
-                                                className="w-full accent-[#59B447] cursor-pointer"
-                                            />
+                                            <input type="range" min="52" max="90" value={printConfig.qrSize} onChange={e => setPrintConfig({...printConfig, qrSize: parseInt(e.target.value, 10)})} className="w-full accent-[#59B447] cursor-pointer" />
                                             <div className="flex justify-between text-[9px] text-slate-400 font-bold mt-1">
-                                                <span>Mediano (55px)</span>
-                                                <span>Recomendado (84px)</span>
-                                                <span>Extra Grande (115px)</span>
+                                                <span>Compacto (52px)</span>
+                                                <span>Ideal A4 (70px)</span>
+                                                <span>Grande (90px)</span>
                                             </div>
                                         </div>
 
-                                        {/* 3. Densidad / Contenido del QR */}
                                         <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
-                                            <label className="block text-[10px] font-black text-slate-500 uppercase mb-1.5">3. Tipo de QR (Velocidad de Lectura)</label>
-                                            <select
-                                                value={printConfig.qrDataMode}
-                                                onChange={e => setPrintConfig({...printConfig, qrDataMode: e.target.value})}
-                                                className="w-full p-2 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-800"
-                                            >
-                                                <option value="COMPACTO">⚡ Rápido: Sede + Código (Cuadros Grandes)</option>
-                                                <option value="MINIMO">🚀 Ultra Rápido: Solo Código (Cuadros Gigantes)</option>
-                                                <option value="COMPLETO">📄 Completo: Sede + Código + Nombre</option>
+                                            <label className="block text-[10px] font-black text-slate-500 uppercase mb-1.5">3. Formato del Código Rojo Impreso</label>
+                                            <select value={printConfig.formatoCodigoRojo} onChange={e => setPrintConfig({...printConfig, formatoCodigoRojo: e.target.value})} className="w-full p-2 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-800">
+                                                <option value="CEROS">Formato 001-00007 (Como en tu Imagen 1)</option>
+                                                <option value="NATURAL">Número Natural (Ej. 7)</option>
                                             </select>
                                         </div>
 
-                                        {/* 4. Tamaño de Letra del Nombre del Cliente */}
                                         <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
                                             <div className="flex justify-between text-[10px] font-black text-slate-500 uppercase mb-1.5">
-                                                <span>4. Letra del Nombre del Cliente</span>
-                                                <span className="text-blue-600 font-black">{printConfig.fontSizeCliente === 0 ? 'Automático' : `${printConfig.fontSizeCliente} px`}</span>
+                                                <span>4. Letra del Nombre (Sin Cortar Palabras)</span>
+                                                <span className="text-blue-600 font-black">{printConfig.fontSizeCliente === 0 ? 'Auto-Ajuste Perfecto' : `${printConfig.fontSizeCliente} px`}</span>
                                             </div>
                                             <div className="flex items-center gap-2">
-                                                <input
-                                                    type="range"
-                                                    min="0"
-                                                    max="22"
-                                                    step="1"
-                                                    value={printConfig.fontSizeCliente}
-                                                    onChange={e => setPrintConfig({...printConfig, fontSizeCliente: parseInt(e.target.value, 10)})}
-                                                    className="flex-1 accent-blue-600 cursor-pointer"
-                                                />
-                                                <button
-                                                    type="button"
-                                                    onClick={() => setPrintConfig({...printConfig, fontSizeCliente: 0})}
-                                                    className="text-[10px] bg-blue-100 text-blue-700 px-2 py-1 rounded font-bold"
-                                                >
-                                                    Auto
-                                                </button>
+                                                <input type="range" min="0" max="16" step="1" value={printConfig.fontSizeCliente} onChange={e => setPrintConfig({...printConfig, fontSizeCliente: parseInt(e.target.value, 10)})} className="flex-1 accent-blue-600 cursor-pointer" />
+                                                <button type="button" onClick={() => setPrintConfig({...printConfig, fontSizeCliente: 0})} className="text-[10px] bg-blue-100 text-blue-700 px-2 py-1 rounded font-bold">Auto</button>
                                             </div>
                                         </div>
 
-                                        {/* 5. Tamaño del N° de Expediente (Rojo) */}
                                         <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
                                             <div className="flex justify-between text-[10px] font-black text-slate-500 uppercase mb-1.5">
-                                                <span>5. Tamaño Código Rojo (001-XXXXX)</span>
+                                                <span>5. Tamaño Código Rojo Inferior</span>
                                                 <span className="text-red-600 font-black">{printConfig.fontSizeCodigo} px</span>
                                             </div>
-                                            <input
-                                                type="range"
-                                                min="18"
-                                                max="36"
-                                                value={printConfig.fontSizeCodigo}
-                                                onChange={e => setPrintConfig({...printConfig, fontSizeCodigo: parseInt(e.target.value, 10)})}
-                                                className="w-full accent-red-600 cursor-pointer"
-                                            />
+                                            <input type="range" min="18" max="32" value={printConfig.fontSizeCodigo} onChange={e => setPrintConfig({...printConfig, fontSizeCodigo: parseInt(e.target.value, 10)})} className="w-full accent-red-600 cursor-pointer" />
                                         </div>
 
-                                        {/* 6. Altura de Celda y Barra de Sede */}
                                         <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 flex flex-col justify-between">
-                                            <div className="flex justify-between items-center mb-2">
-                                                <span className="text-[10px] font-black text-slate-500 uppercase">6. Altura Celda: {printConfig.ticketHeightMm}mm</span>
-                                                <input
-                                                    type="number"
-                                                    min="35"
-                                                    max="50"
-                                                    value={printConfig.ticketHeightMm}
-                                                    onChange={e => setPrintConfig({...printConfig, ticketHeightMm: parseInt(e.target.value, 10) || 40})}
-                                                    className="w-16 p-1 border rounded text-center text-xs font-bold bg-white"
-                                                />
-                                            </div>
-                                            <label className="flex items-center gap-2 cursor-pointer">
-                                                <input
-                                                    type="checkbox"
-                                                    checked={printConfig.showHeaderSede}
-                                                    onChange={e => setPrintConfig({...printConfig, showHeaderSede: e.target.checked})}
-                                                    className="w-4 h-4 accent-[#59B447]"
-                                                />
-                                                <span className="text-[11px] font-bold text-slate-700">Mostrar barra superior con nombre de Sede</span>
-                                            </label>
+                                            <label className="block text-[10px] font-black text-slate-500 uppercase mb-1">6. Velocidad / Densidad del QR</label>
+                                            <select value={printConfig.qrDataMode} onChange={e => setPrintConfig({...printConfig, qrDataMode: e.target.value})} className="w-full p-1.5 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-800">
+                                                <option value="COMPACTO">⚡ Rápido: Sede + Código (Recomendado)</option>
+                                                <option value="MINIMO">🚀 Ultra Rápido: Solo Código</option>
+                                                <option value="COMPLETO">📄 Completo: Sede + Código + Nombre</option>
+                                            </select>
                                         </div>
                                     </div>
                                 </div>
 
+                                {/* BARRA DE ACCIÓN: DESCARGAR PDF A4 EXACTO O IMPRIMIR */}
                                 <div className="no-print mb-4 flex flex-col md:flex-row justify-between items-start md:items-center bg-white p-4 rounded-xl shadow-sm border border-slate-200 gap-4">
                                     <div>
-                                        <h2 className="text-xl font-bold text-slate-800"><i className="fa-solid fa-print text-[#59B447]"></i> Vista Previa en Vivo (A4 - 4x6 = 24 Tickets por Hoja)</h2>
-                                        <p className="text-sm text-slate-500">Etiquetas en cola: <span className="font-bold text-blue-600">{ticketsQueue.length}</span></p>
+                                        <h2 className="text-lg font-black text-slate-800"><i className="fa-solid fa-print text-[#59B447] mr-1"></i> Vista Previa Real en Tamaño A4 (210mm)</h2>
+                                        <p className="text-xs text-slate-500">Etiquetas en cola: <span className="font-bold text-blue-600">{ticketsQueue.length}</span> ({printPages.length} hojas A4). Usa el botón verde de PDF para una impresión 100% libre de descuadres.</p>
                                     </div>
-                                    <div className="flex gap-2 w-full md:w-auto">
-                                        <button onClick={() => { if(confirm("¿Vaciar todas las etiquetas en cola?")) setTicketsQueue([]); }} className="bg-red-50 text-red-600 px-4 py-2.5 rounded-lg font-bold hover:bg-red-100 flex-1 sm:flex-none text-sm">Vaciar Todo</button>
-                                        <button onClick={() => window.print()} className="bg-slate-800 text-white px-6 py-2.5 rounded-lg font-bold shadow-md hover:bg-slate-700 flex-1 sm:flex-none text-sm">Imprimir Hojas A4 Ahora</button>
+                                    <div className="flex flex-wrap gap-2 w-full md:w-auto">
+                                        <button onClick={() => { if(confirm("¿Vaciar todas las etiquetas en cola?")) setTicketsQueue([]); }} className="bg-red-50 text-red-600 px-4 py-2.5 rounded-xl font-bold hover:bg-red-100 text-xs">
+                                            Vaciar Cola
+                                        </button>
+                                        <button onClick={descargarTicketsPDFExacto} className="bg-[#59B447] text-white px-5 py-2.5 rounded-xl font-black shadow-md hover:bg-green-600 text-xs flex items-center gap-1.5">
+                                            <i className="fa-solid fa-file-pdf text-sm"></i> Descargar PDF A4 Exacto (Recomendado)
+                                        </button>
+                                        <button onClick={() => window.print()} className="bg-slate-800 text-white px-5 py-2.5 rounded-xl font-bold shadow-md hover:bg-slate-700 text-xs">
+                                            <i className="fa-solid fa-print mr-1"></i> Imprimir Directo
+                                        </button>
                                     </div>
                                 </div>
 
-                                {/* HOJAS A4 DE IMPRESIÓN */}
-                                <div className="print-container w-full flex flex-col items-center">
+                                {/* LIENZO A4 REAL (210MM EN PANTALLA Y EN IMPRESORA) */}
+                                <div className="print-container w-full overflow-x-auto flex flex-col items-center pb-8">
                                     {printPages.map((page, pageIdx) => (
-                                        <div key={pageIdx} className="print-area bg-white mx-auto w-full mb-8" style={{ pageBreakAfter: pageIdx === printPages.length - 1 ? 'auto' : 'always' }}>
+                                        <div key={pageIdx} className="print-area bg-white mx-auto mb-8 shadow-lg" style={{ pageBreakAfter: pageIdx === printPages.length - 1 ? 'auto' : 'always' }}>
                                             <div className="grid grid-cols-4 w-full border-t-2 border-l-2 border-black">
                                                 {page.map((t, idx) => {
                                                     const cellHeight = `${printConfig.ticketHeightMm}mm`;
@@ -2155,55 +2555,56 @@
                                                         <div key={`empty-${idx}`} className="ticket-cell flex flex-col border-r-2 border-b-2 border-black bg-white box-border justify-between" style={{ height: cellHeight }}>
                                                             {printConfig.showHeaderSede && <div className="w-full bg-white border-b-2 border-black shrink-0" style={{ height: '4.2mm' }}></div>}
                                                             <div className="flex-1 w-full bg-transparent"></div>
-                                                            <div className="w-full bg-slate-50/30 border-t-2 border-black shrink-0" style={{ height: '12.5mm' }}></div>
+                                                            <div className="w-full bg-slate-50/30 border-t-2 border-black shrink-0" style={{ height: '11.5mm' }}></div>
                                                         </div>
                                                     );
 
-                                                    const nombres = parseTicketName(t.cliente);
                                                     const qrValue = armarPayloadQR(t);
-                                                    const estiloTexto = obtenerEstiloNombreCliente(t.cliente);
+                                                    const fontOptimo = calcularFontSizeOptimo(t.cliente, printConfig.fontSizeCliente, printConfig.qrPosition);
+                                                    const lineasNombre = dividirEnLineasSeguras(t.cliente, 13);
+                                                    const codRojo = obtenerCodigoVisibleTicket(t.id);
 
                                                     return (
                                                         <div key={idx} className="ticket-cell flex flex-col border-r-2 border-b-2 border-black bg-white box-border overflow-hidden justify-between" style={{ height: cellHeight }}>
-                                                            {/* Franja Superior Opcional de Sede */}
                                                             {printConfig.showHeaderSede && (
                                                                 <div className="w-full bg-white border-b-2 border-black shrink-0 flex items-center justify-between px-1.5" style={{ height: '4.2mm' }}>
-                                                                    <span className="text-[8px] font-black text-black">{t.sede || sedeActual}</span>
-                                                                    <span className="text-[8px] font-bold text-slate-600">CREDIBAN</span>
-                                                                </div>
-                                                            )}
-
-                                                            {/* Cuerpo Central según la Ubicación del QR elegida */}
-                                                            {printConfig.qrPosition === 'DERECHA' && (
-                                                                <div className="flex-1 w-full flex items-center justify-between px-1 py-0.5 overflow-hidden gap-1">
-                                                                    <div className="flex-1 flex flex-col items-center justify-center overflow-hidden px-0.5">
-                                                                        <span className="font-black text-black uppercase text-center w-full break-words whitespace-normal" style={estiloTexto}>{nombres.part1}</span>
-                                                                        {nombres.part2 && <span className="font-extrabold text-black uppercase text-center w-full break-words whitespace-normal" style={estiloTexto}>{nombres.part2}</span>}
-                                                                    </div>
-                                                                    <div className="shrink-0 flex items-center justify-center bg-white">
-                                                                        <QRCodeCanvas value={qrValue} size={printConfig.qrSize} />
-                                                                    </div>
+                                                                    <span className="text-[7.5px] font-black text-black">{t.sede || sedeActual}</span>
+                                                                    <span className="text-[7.5px] font-bold text-slate-500">CREDIBAN</span>
                                                                 </div>
                                                             )}
 
                                                             {printConfig.qrPosition === 'IZQUIERDA' && (
-                                                                <div className="flex-1 w-full flex items-center justify-between px-1 py-0.5 overflow-hidden gap-1">
-                                                                    <div className="shrink-0 flex items-center justify-center bg-white">
-                                                                        <QRCodeCanvas value={qrValue} size={printConfig.qrSize} />
+                                                                <div className="flex-1 w-full flex items-center justify-between px-1.5 py-0.5 overflow-hidden gap-1.5">
+                                                                    <QRCodeCanvas value={qrValue} size={printConfig.qrSize} />
+                                                                    <div className="flex-1 flex flex-col items-center justify-center overflow-hidden">
+                                                                        {lineasNombre.map((lin, lIdx) => (
+                                                                            <span key={lIdx} className="ticket-name-text font-black text-black uppercase text-center w-full leading-[1.12]" style={{ fontSize: `${fontOptimo}px`, fontFamily: 'Arial, sans-serif' }}>
+                                                                                {lin}
+                                                                            </span>
+                                                                        ))}
                                                                     </div>
-                                                                    <div className="flex-1 flex flex-col items-center justify-center overflow-hidden px-0.5">
-                                                                        <span className="font-black text-black uppercase text-center w-full break-words whitespace-normal" style={estiloTexto}>{nombres.part1}</span>
-                                                                        {nombres.part2 && <span className="font-extrabold text-black uppercase text-center w-full break-words whitespace-normal" style={estiloTexto}>{nombres.part2}</span>}
+                                                                </div>
+                                                            )}
+
+                                                            {printConfig.qrPosition === 'DERECHA' && (
+                                                                <div className="flex-1 w-full flex items-center justify-between px-1.5 py-0.5 overflow-hidden gap-1.5">
+                                                                    <div className="flex-1 flex flex-col items-center justify-center overflow-hidden">
+                                                                        {lineasNombre.map((lin, lIdx) => (
+                                                                            <span key={lIdx} className="ticket-name-text font-black text-black uppercase text-center w-full leading-[1.12]" style={{ fontSize: `${fontOptimo}px`, fontFamily: 'Arial, sans-serif' }}>
+                                                                                {lin}
+                                                                            </span>
+                                                                        ))}
                                                                     </div>
+                                                                    <QRCodeCanvas value={qrValue} size={printConfig.qrSize} />
                                                                 </div>
                                                             )}
 
                                                             {printConfig.qrPosition === 'ARRIBA' && (
                                                                 <div className="flex-1 w-full flex flex-col items-center justify-center px-1 py-0.5 overflow-hidden">
-                                                                    <div className="shrink-0 flex items-center justify-center bg-white mb-0.5">
-                                                                        <QRCodeCanvas value={qrValue} size={Math.min(printConfig.qrSize, 74)} />
-                                                                    </div>
-                                                                    <span className="font-black text-black uppercase text-center w-full truncate" style={estiloTexto}>{t.cliente}</span>
+                                                                    <QRCodeCanvas value={qrValue} size={Math.min(printConfig.qrSize, 64)} />
+                                                                    <span className="ticket-name-text font-black text-black uppercase text-center w-full truncate mt-0.5" style={{ fontSize: `${fontOptimo}px`, fontFamily: 'Arial, sans-serif' }}>
+                                                                        {t.cliente}
+                                                                    </span>
                                                                 </div>
                                                             )}
 
@@ -2213,17 +2614,10 @@
                                                                 </div>
                                                             )}
 
-                                                            {/* Franja Inferior con Código de Expediente en Rojo */}
-                                                            <div className="w-full flex flex-col items-center justify-center bg-white border-t-2 border-black shrink-0" style={{ height: '12.5mm' }}>
-                                                                <span
-                                                                    className="font-black text-red-600 tracking-tighter font-sans"
-                                                                    style={{ fontSize: `${printConfig.fontSizeCodigo}px`, lineHeight: '1', textShadow: '0px 0px 0px #dc2626' }}
-                                                                >
-                                                                    {t.id}
+                                                            <div className="w-full flex flex-col items-center justify-center bg-white border-t-2 border-black shrink-0" style={{ height: '11.5mm' }}>
+                                                                <span className="font-black text-red-600 tracking-tighter font-sans" style={{ fontSize: `${printConfig.fontSizeCodigo}px`, lineHeight: '1' }}>
+                                                                    {codRojo}
                                                                 </span>
-                                                                {printConfig.qrPosition === 'GIGANTE' && (
-                                                                    <span className="text-[8px] font-black text-black uppercase truncate max-w-[95%] leading-none mt-0.5">{t.cliente}</span>
-                                                                )}
                                                             </div>
                                                         </div>
                                                     );
