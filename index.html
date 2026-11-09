@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Control de Expedientes & QR - CREDIBAN V21 Cloud</title>
+    <title>Control de Expedientes & QR - CREDIBAN V22 Cloud</title>
     
     <!-- Librerías Core -->
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -40,7 +40,6 @@
             object-fit: cover !important;
         }
 
-        /* Vista previa WYSIWYG exacta a la hoja A4 (Evita que las palabras se partan al imprimir) */
         .print-area {
             width: 210mm !important;
             min-width: 210mm !important;
@@ -119,17 +118,14 @@
                 };
 
                 if (type === 'beep') {
-                    // Sonido potente de Caja Registradora ("¡Clin-Beep!" metálico fuerte)
                     playDualTone(2100, 2750, 0, 0.06, 'square', 0.95);
                     playDualTone(2650, 3300, 0.06, 0.14, 'triangle', 0.98);
                     if (navigator.vibrate) navigator.vibrate(45);
                 } else if (type === 'duplicate') {
-                    // Doble bocina ámbar de "Ya contabilizado"
                     playDualTone(520, 680, 0, 0.16, 'sawtooth', 0.95);
                     playDualTone(420, 560, 0.20, 0.22, 'sawtooth', 0.95);
                     if (navigator.vibrate) navigator.vibrate([120, 60, 120]);
                 } else if (type === 'alert') {
-                    // Alarma fuerte de ERROR (No existe / Mora Dura / Lista Negra)
                     playDualTone(260, 310, 0, 0.25, 'sawtooth', 0.98);
                     playDualTone(190, 240, 0.28, 0.38, 'sawtooth', 0.98);
                     if (navigator.vibrate) navigator.vibrate([250, 80, 250]);
@@ -138,7 +134,7 @@
         };
 
         // =========================================================================
-        // 3. NORMALIZADOR DUAL DE EXPEDIENTES (RECONOCE "7" Y "001-00007" POR IGUAL)
+        // 3. NORMALIZADOR DUAL DE EXPEDIENTES ("7" === "001-00007") + VERIFICADOR INV
         // =========================================================================
         const normalizarIdNatural = (raw) => {
             const str = String(raw || '').trim().toUpperCase();
@@ -146,7 +142,7 @@
             const parteFinal = str.includes('-') ? str.split('-').pop() : str;
             const soloNum = parteFinal.replace(/\D/g, '');
             if (!soloNum) return str;
-            return String(parseInt(soloNum, 10)); // "001-00007" -> "7" y "7" -> "7"
+            return String(parseInt(soloNum, 10));
         };
 
         const formatearConCeros = (raw) => {
@@ -155,7 +151,12 @@
             return soloNum ? "001-" + soloNum.padStart(5, '0') : '';
         };
 
-        // Calcula el tamaño de letra ideal para que NINGÚN apellido largo se corte en 50mm
+        // Función única y blindada para saber si un expediente ya fue contabilizado en la sesión actual
+        const estaContabilizadoEnSesion = (exp) => {
+            if (!exp) return false;
+            return Boolean(exp.invFecha && String(exp.invFecha).trim() !== '');
+        };
+
         const calcularFontSizeOptimo = (nombreCompleto, manualSize, qrPos) => {
             if (manualSize > 0) return manualSize;
             const palabras = String(nombreCompleto || '').trim().split(/\s+/);
@@ -187,7 +188,6 @@
             return lineas.slice(0, 4);
         };
 
-        // Clasificador Estricto de Roles
         const clasificarRolSistema = (cargoRaw) => {
             const c = String(cargoRaw || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().trim();
             if (c.includes("ASESOR") || c.includes("ANALISTA") || c.includes("PROMOTOR") || c === "TRABAJADOR") return "BLOQUEADO_ASESOR";
@@ -197,8 +197,7 @@
             return "NO_AUTORIZADO";
         };
 
-        // Componente QR HD
-        function QRCodeCanvas({ value, size = 72 }) {
+        function QRCodeCanvas({ value, size = 70 }) {
             const canvasRef = React.useRef(null);
             React.useEffect(() => {
                 if (canvasRef.current && window.QRious) {
@@ -221,7 +220,6 @@
             );
         }
 
-        // Botón de Ayuda (i) para Tutoriales de Nuevos Usuarios
         function HelpButton({ title, steps, onOpen }) {
             return (
                 <button
@@ -237,7 +235,7 @@
 
         function App() {
             // =====================================================================
-            // ESTADOS DE SEGURIDAD Y ACCESO
+            // ESTADOS DE SEGURIDAD Y PERMISOS ACTUALIZADOS (CAJA + ADMIN + GERENTE)
             // =====================================================================
             const [isAuth, setIsAuth] = React.useState(false);
             const [isLoading, setIsLoading] = React.useState(false);
@@ -245,12 +243,12 @@
             const [loginErrorMsg, setLoginErrorMsg] = React.useState('');
             const [helpModal, setHelpModal] = React.useState(null);
 
-            const [rememberPass, setRememberPass] = React.useState(() => localStorage.getItem('crediban_v21_remember') !== 'false');
+            const [rememberPass, setRememberPass] = React.useState(() => localStorage.getItem('crediban_v22_remember') !== 'false');
             const [showPassLogin, setShowPassLogin] = React.useState(false);
-            const [usuarioInput, setUsuarioInput] = React.useState(() => localStorage.getItem('crediban_v21_user') || '');
+            const [usuarioInput, setUsuarioInput] = React.useState(() => localStorage.getItem('crediban_v22_user') || '');
             const [passwordInput, setPasswordInput] = React.useState(() => {
-                return localStorage.getItem('crediban_v21_remember') !== 'false'
-                    ? (localStorage.getItem('crediban_v21_pass') || '')
+                return localStorage.getItem('crediban_v22_remember') !== 'false'
+                    ? (localStorage.getItem('crediban_v22_pass') || '')
                     : '';
             });
 
@@ -258,34 +256,44 @@
             const [estadosDisponibles, setEstadosDisponibles] = React.useState(["ACTIVO", "MORA DURA", "CANCELADO", "LISTA NEGRA", "JUDICIAL", "REPROGRAMADO"]);
             const [ubicacionesDisponibles, setUbicacionesDisponibles] = React.useState(["CAJA (ARCHIVO)", "EN COMITÉ", "AUDITORÍA", "ARCHIVO CENTRAL"]);
 
-            const [sedeActual, setSedeActual] = React.useState(() => localStorage.getItem('crediban_v21_sede') || 'HUACHO');
+            const [sedeActual, setSedeActual] = React.useState(() => localStorage.getItem('crediban_v22_sede') || 'HUACHO');
             const [operadorNombre, setOperadorNombre] = React.useState('');
             const [rolSistema, setRolSistema] = React.useState('');
 
+            // Matriz Quirúrgica de Permisos:
+            // - Cajeros, Administradores y Gerentes pueden Editar Expedientes y Subir CSV en Base de Datos.
+            // - Solo Gerentes pueden exportar CSV/PDF.
             const esGerente = rolSistema === 'GERENTE';
             const esAdmin = rolSistema === 'ADMINISTRADOR';
             const esCajero = rolSistema === 'CAJERO';
-            const puedeOperarCaja = esCajero || esGerente;
-            const puedeExportar = esGerente;
-            const puedeEditarBase = esGerente;
+            const puedeOperarCaja = esCajero || esGerente;                 // Escáner QR, Préstamos, Tickets A4
+            const puedeGestionarBase = esCajero || esAdmin || esGerente;   // Registrar, Editar y Subir CSV (Imagen 1)
+            const puedeEditarBase = esCajero || esAdmin || esGerente;      // Botón Editar habilitado para Caja, Admin y Gerente
+            const puedeExportar = esGerente;                               // Exportar CSV/PDF exclusivo Gerencia
 
             const [view, setView] = React.useState('dashboard');
             const [asesores, setAsesores] = React.useState([]);
             const [expedientes, setExpedientes] = React.useState([]);
             const [ticketsQueue, setTicketsQueue] = React.useState(() => JSON.parse(localStorage.getItem('crediban_tickets_queue')) || []);
 
+            // ESTADO DE CIERRE OFICIAL DE INVENTARIO DE LA SEDE
+            const [cierreInfo, setCierreInfo] = React.useState({ cerrado: false });
+            const [modalCierreInv, setModalCierreInv] = React.useState(false);
+            const [passCierreInput, setPassCierreInput] = React.useState('');
+            const [obsCierreInput, setObsCierreInput] = React.useState('INVENTARIO FÍSICO CONFORME');
+
             // CONFIGURACIÓN DE IMPRESIÓN A4
             const [printConfig, setPrintConfig] = React.useState(() => {
-                const saved = localStorage.getItem('crediban_v21_print_cfg');
+                const saved = localStorage.getItem('crediban_v22_print_cfg');
                 if (saved) {
                     try { return JSON.parse(saved); } catch (e) {}
                 }
                 return {
-                    qrSize: 70,                 // 70px cabe perfecto en celda de 52mm dejando 115px para el nombre
-                    qrPosition: 'IZQUIERDA',    // Como en tu Imagen 1: QR a la izquierda y nombre a la derecha
-                    qrDataMode: 'COMPACTO',     // Sede + Código
-                    formatoCodigoRojo: 'CEROS', // 'CEROS' (001-00007) | 'NATURAL' (7)
-                    fontSizeCliente: 0,         // 0 = Auto sin cortar palabras
+                    qrSize: 70,
+                    qrPosition: 'IZQUIERDA',
+                    qrDataMode: 'COMPACTO',
+                    formatoCodigoRojo: 'CEROS',
+                    fontSizeCliente: 0,
                     fontSizeCodigo: 24,
                     ticketHeightMm: 40,
                     showHeaderSede: true
@@ -293,10 +301,10 @@
             });
 
             React.useEffect(() => {
-                localStorage.setItem('crediban_v21_print_cfg', JSON.stringify(printConfig));
+                localStorage.setItem('crediban_v22_print_cfg', JSON.stringify(printConfig));
             }, [printConfig]);
 
-            // ESTADOS DEL ESCÁNER QR, BUSCADOR EN VIVO Y BLOQUES DE ESTANTE
+            // ESTADOS DEL ESCÁNER QR Y PROTECCIÓN DE CONTEO EN VIVO
             const [scanMode, setScanMode] = React.useState('INVENTARIO');
             const [asesorLote, setAsesorLote] = React.useState('');
             const [cameraActive, setCameraActive] = React.useState(false);
@@ -305,18 +313,20 @@
             const [torchOn, setTorchOn] = React.useState(false);
             const [scanFeedback, setScanFeedback] = React.useState(null);
             const [scanLog, setScanLog] = React.useState([]);
-            const [alertasEscaneo, setAlertasEscaneo] = React.useState([]); // Bitácora de errores para que no se pase ninguno
+            const [alertasEscaneo, setAlertasEscaneo] = React.useState([]);
             const [liveSyncActive, setLiveSyncActive] = React.useState(true);
             const [lastSyncTime, setLastSyncTime] = React.useState('');
             const [lectorFisicoInput, setLectorFisicoInput] = React.useState('');
 
-            // Filtros en la Tabla de Inventario en Vivo (Buscador de nombre + Verificador por Bloques 1 al 50)
+            // Filtros en la Tabla de Inventario en Vivo
             const [liveTableSearch, setLiveTableSearch] = React.useState('');
             const [bloqueTamano, setBloqueTamano] = React.useState(50);
             const [bloqueDesde, setBloqueDesde] = React.useState('');
             const [bloqueHasta, setBloqueHasta] = React.useState('');
             const [soloFaltantesBloque, setSoloFaltantesBloque] = React.useState(false);
 
+            // Caché temporal de escaneos locales (15 seg) para evitar que pollLive pise un escaneo que aún está viajando a la nube
+            const recentLocalScansRef = React.useRef({});
             const html5QrInstanceRef = React.useRef(null);
             const lastScannedRef = React.useRef({ code: '', time: 0 });
             const expedientesRef = React.useRef(expedientes);
@@ -324,12 +334,14 @@
             const asesorLoteRef = React.useRef(asesorLote);
             const operadorRef = React.useRef(operadorNombre);
             const sedeRef = React.useRef(sedeActual);
+            const cierreInfoRef = React.useRef(cierreInfo);
 
             React.useEffect(() => { expedientesRef.current = expedientes; }, [expedientes]);
             React.useEffect(() => { scanModeRef.current = scanMode; }, [scanMode]);
             React.useEffect(() => { asesorLoteRef.current = asesorLote; }, [asesorLote]);
             React.useEffect(() => { operadorRef.current = operadorNombre; }, [operadorNombre]);
             React.useEffect(() => { sedeRef.current = sedeActual; }, [sedeActual]);
+            React.useEffect(() => { cierreInfoRef.current = cierreInfo; }, [cierreInfo]);
             React.useEffect(() => { localStorage.setItem('crediban_tickets_queue', JSON.stringify(ticketsQueue)); }, [ticketsQueue]);
 
             const fetchGAS = async (payloadObj) => {
@@ -348,6 +360,25 @@
                 if (Array.isArray(param.ubicaciones) && param.ubicaciones.length > 0) setUbicacionesDisponibles(param.ubicaciones);
             };
 
+            // Mezcla inteligente: preserva los escaneos locales recientes (<15 seg) para que el contador nunca parpadee ni vuelva a 0
+            const fusionarConEscaneosLocales = (listaServidor) => {
+                const ahora = Date.now();
+                const mapaRecientes = recentLocalScansRef.current;
+                return (listaServidor || []).map(itemSrv => {
+                    const idNat = normalizarIdNatural(itemSrv.id);
+                    const localEntry = mapaRecientes[idNat];
+                    if (localEntry && (ahora - localEntry.timestamp) < 15000) {
+                        // Si en el servidor aún no llegó el cambio, mantenemos el dato local recién escaneado
+                        if (!itemSrv.invFecha && localEntry.data.invFecha) {
+                            return localEntry.data;
+                        }
+                    } else if (localEntry) {
+                        delete mapaRecientes[idNat];
+                    }
+                    return itemSrv;
+                });
+            };
+
             const getFechaHora = () => {
                 const now = new Date();
                 const d = String(now.getDate()).padStart(2, '0');
@@ -356,11 +387,6 @@
                 const h = String(now.getHours()).padStart(2, '0');
                 const min = String(now.getMinutes()).padStart(2, '0');
                 return `${d}/${m}/${y}, ${h}:${min}`;
-            };
-
-            const getHoyId = () => {
-                const now = new Date();
-                return `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
             };
 
             // =====================================================================
@@ -407,17 +433,17 @@
                         return;
                     }
 
-                    localStorage.setItem('crediban_v21_user', usuarioInput.trim());
-                    localStorage.setItem('crediban_v21_remember', rememberPass ? 'true' : 'false');
+                    localStorage.setItem('crediban_v22_user', usuarioInput.trim());
+                    localStorage.setItem('crediban_v22_remember', rememberPass ? 'true' : 'false');
                     if (rememberPass) {
-                        localStorage.setItem('crediban_v21_pass', passwordInput.trim());
+                        localStorage.setItem('crediban_v22_pass', passwordInput.trim());
                     } else {
-                        localStorage.removeItem('crediban_v21_pass');
+                        localStorage.removeItem('crediban_v22_pass');
                     }
 
                     const sedeDetectada = data.sede || userObj.sedeActiva || 'HUACHO';
                     setSedeActual(sedeDetectada);
-                    localStorage.setItem('crediban_v21_sede', sedeDetectada);
+                    localStorage.setItem('crediban_v22_sede', sedeDetectada);
 
                     setOperadorNombre(userObj.nombreCorto || userObj.nombre || usuarioInput.toUpperCase());
                     setRolSistema(rolClasificado);
@@ -425,6 +451,7 @@
                     if (data.parametros) aplicarCatalogoParametros(data.parametros);
                     if (Array.isArray(data.asesores)) setAsesores(data.asesores);
                     if (Array.isArray(data.data)) setExpedientes(data.data);
+                    if (data.cierreInfo) setCierreInfo(data.cierreInfo);
 
                     setLastSyncTime(new Date().toLocaleTimeString());
                     setView(rolClasificado === 'ADMINISTRADOR' ? 'dashboard' : 'escaner');
@@ -447,11 +474,13 @@
                         usuario: operadorNombre
                     });
                     if (data.status === 'success') {
+                        recentLocalScansRef.current = {};
                         setSedeActual(nuevaSede);
-                        localStorage.setItem('crediban_v21_sede', nuevaSede);
+                        localStorage.setItem('crediban_v22_sede', nuevaSede);
                         setExpedientes(data.data || []);
                         if (Array.isArray(data.asesores)) setAsesores(data.asesores);
                         if (data.parametros) aplicarCatalogoParametros(data.parametros);
+                        if (data.cierreInfo) setCierreInfo(data.cierreInfo);
                         setScanFeedback(null);
                     }
                 } catch (e) {
@@ -460,7 +489,7 @@
                 setIsLoading(false);
             };
 
-            // SINCRONIZACIÓN EN VIVO CADA 3 SEGUNDOS
+            // SINCRONIZACIÓN EN VIVO CADA 3 SEGUNDOS (PROTEGIDA CONTRA PARPADEO DE CONTEO)
             React.useEffect(() => {
                 if (!isAuth || !liveSyncActive || (view !== 'escaner' && view !== 'dashboard')) return;
                 const timer = setInterval(async () => {
@@ -471,9 +500,10 @@
                             password: passwordInput
                         });
                         if (data.status === 'success' && Array.isArray(data.data)) {
-                            setExpedientes(data.data);
+                            setExpedientes(fusionarConEscaneosLocales(data.data));
                             if (Array.isArray(data.asesores)) setAsesores(data.asesores);
                             if (data.parametros) aplicarCatalogoParametros(data.parametros);
+                            if (data.cierreInfo) setCierreInfo(data.cierreInfo);
                             setLastSyncTime(new Date().toLocaleTimeString());
                         }
                     } catch (e) {}
@@ -507,7 +537,7 @@
             };
 
             // =====================================================================
-            // PROCESADOR QR UNIVERSAL: EMPAREJA "001-00007" CON "7" AUTOMÁTICAMENTE
+            // PROCESADOR QR UNIVERSAL CON CONTEO INMEDIATO Y CONTROL DE CIERRE
             // =====================================================================
             const procesarLecturaQR = React.useCallback(async (rawText) => {
                 if (!rawText) return;
@@ -518,6 +548,19 @@
                     return;
                 }
                 lastScannedRef.current = { code: clean, time: nowMs };
+
+                const modoActual = scanModeRef.current;
+
+                // Si está en modo INVENTARIO y la sesión de la sede ya fue cerrada oficialmente, avisar
+                if (modoActual === 'INVENTARIO' && cierreInfoRef.current?.cerrado) {
+                    playSound('alert');
+                    setScanFeedback({
+                        type: 'error',
+                        title: `🔒 INVENTARIO DEL DÍA YA CERRADO (${cierreInfoRef.current.cajero})`,
+                        subtitle: 'Toca "Iniciar Nueva Sesión de Inventario" si deseas empezar un nuevo conteo.'
+                    });
+                    return;
+                }
 
                 let idNaturalDetectado = '';
                 let clienteQR = '';
@@ -539,7 +582,6 @@
                     return;
                 }
 
-                // BÚSQUEDA DUAL: Empareja tanto si en la base está como "7" o como "001-00007"
                 const exp = expedientesRef.current.find(x => normalizarIdNatural(x.id) === idNaturalDetectado);
 
                 if (!exp) {
@@ -559,24 +601,22 @@
                     return;
                 }
 
-                const modoActual = scanModeRef.current;
                 const asesorSeleccionado = asesorLoteRef.current;
                 const cajeroNombre = operadorRef.current;
-                const hoySesion = getHoyId();
                 const estadoPrevio = JSON.parse(JSON.stringify(exp));
 
-                // MODO 1: INVENTARIO EN VIVO
+                // MODO 1: INVENTARIO EN VIVO (EVITA DUPLICADOS ENTRE CAJEROS Y SUBE EL CONTEO AL INSTANTE)
                 if (modoActual === 'INVENTARIO') {
-                    if (exp.invSesion === hoySesion && exp.invFecha) {
+                    if (estaContabilizadoEnSesion(exp)) {
                         playSound('duplicate');
                         setAlertasEscaneo(prev => [{
                             hora: getFechaHora(),
-                            titulo: `DUPLICADO: EXP. ${exp.id}`,
+                            titulo: `DUPLICADO: EXP. ${normalizarIdNatural(exp.id)}`,
                             detalle: `${exp.cliente} (Ya pasado por ${exp.invCajero})`
                         }, ...prev.slice(0, 9)]);
                         setScanFeedback({
                             type: 'warning',
-                            title: `⚠️ YA CONTABILIZADO: EXP. ${exp.id} (${formatearConCeros(exp.id)})`,
+                            title: `⚠️ YA CONTABILIZADO: EXP. ${normalizarIdNatural(exp.id)} (${formatearConCeros(exp.id)})`,
                             subtitle: `${exp.cliente} — Escaneado por ${exp.invCajero || 'CAJERO'} (${exp.invFecha})`
                         });
                         return;
@@ -600,25 +640,43 @@
                         fechaUltimoMov: horaActual,
                         invFecha: horaActual,
                         invCajero: cajeroNombre,
-                        invSesion: hoySesion,
+                        invSesion: 'SES_ACTIVA',
                         historial: nuevoHist
+                    };
+
+                    // Guardar en caché local de protección para que el contador suba al instante y no parpadee
+                    recentLocalScansRef.current[idNaturalDetectado] = {
+                        timestamp: Date.now(),
+                        data: actualizado
                     };
 
                     setExpedientes(prev => prev.map(item => normalizarIdNatural(item.id) === idNaturalDetectado ? actualizado : item));
                     setScanLog(prev => [{ id: exp.id, cliente: exp.cliente, prev: estadoPrevio }, ...prev.slice(0, 29)]);
                     setScanFeedback({
                         type: esRestringido ? 'danger_ok' : 'success',
-                        title: `✅ INVENTARIO REGISTRADO: EXP. ${exp.id} (${formatearConCeros(exp.id)})`,
+                        title: `✅ INVENTARIO REGISTRADO: EXP. ${normalizarIdNatural(exp.id)} (${formatearConCeros(exp.id)})`,
                         subtitle: `${exp.cliente} | Estado: ${exp.estadoCredito}${estabaFuera ? ' | 🔄 Devuelto a CAJA' : ''}`
                     });
 
                     const resp = await syncExpedienteCloud(actualizado, true, true);
                     if (resp && resp.status === 'duplicate_inv') {
                         playSound('duplicate');
+                        const actualizadoOtro = { ...actualizado, invFecha: resp.invFecha, invCajero: resp.invCajero };
+                        recentLocalScansRef.current[idNaturalDetectado] = { timestamp: Date.now(), data: actualizadoOtro };
+                        setExpedientes(prev => prev.map(item => normalizarIdNatural(item.id) === idNaturalDetectado ? actualizadoOtro : item));
                         setScanFeedback({
                             type: 'warning',
-                            title: `⚠️ YA CONTABILIZADO EN OTRO CELULAR: EXP. ${exp.id}`,
+                            title: `⚠️ YA CONTABILIZADO EN OTRO CELULAR: EXP. ${normalizarIdNatural(exp.id)}`,
                             subtitle: `Registrado por ${resp.invCajero} (${resp.invFecha})`
+                        });
+                    } else if (resp && resp.status === 'inventory_closed') {
+                        playSound('alert');
+                        delete recentLocalScansRef.current[idNaturalDetectado];
+                        setExpedientes(prev => prev.map(item => normalizarIdNatural(item.id) === idNaturalDetectado ? estadoPrevio : item));
+                        setScanFeedback({
+                            type: 'error',
+                            title: '🔒 INVENTARIO CERRADO',
+                            subtitle: resp.message
                         });
                     }
                     return;
@@ -647,7 +705,7 @@
                     setScanLog(prev => [{ id: exp.id, cliente: exp.cliente, prev: estadoPrevio }, ...prev.slice(0, 29)]);
                     setScanFeedback({
                         type: 'success',
-                        title: `📥 DEVUELTO A CAJA: EXP. ${exp.id}`,
+                        title: `📥 DEVUELTO A CAJA: EXP. ${normalizarIdNatural(exp.id)}`,
                         subtitle: `${exp.cliente} (Retornado de: ${ubicacionPrevia})`
                     });
                     syncExpedienteCloud(actualizado, true);
@@ -689,7 +747,7 @@
                     setScanLog(prev => [{ id: exp.id, cliente: exp.cliente, prev: estadoPrevio }, ...prev.slice(0, 29)]);
                     setScanFeedback({
                         type: esRestringido ? 'danger_ok' : (prestamoCruzado ? 'warning' : 'success'),
-                        title: `📤 ENTREGADO A ${asesorSeleccionado}: EXP. ${exp.id}`,
+                        title: `📤 ENTREGADO A ${asesorSeleccionado}: EXP. ${normalizarIdNatural(exp.id)}`,
                         subtitle: `${exp.cliente} | Estado: ${exp.estadoCredito}${prestamoCruzado ? ` | ⚠️ Figuraba ${exp.ubicacionFisica}` : ''}`
                     });
                     syncExpedienteCloud(actualizado, true);
@@ -769,39 +827,94 @@
                 if (scanLog.length === 0) return;
                 const ultimo = scanLog[0];
                 const restaurado = ultimo.prev;
-                setExpedientes(prev => prev.map(item => normalizarIdNatural(item.id) === normalizarIdNatural(restaurado.id) ? restaurado : item));
+                const idNat = normalizarIdNatural(restaurado.id);
+                delete recentLocalScansRef.current[idNat];
+                setExpedientes(prev => prev.map(item => normalizarIdNatural(item.id) === idNat ? restaurado : item));
                 setScanLog(prev => prev.slice(1));
                 setScanFeedback({
                     type: 'warning',
-                    title: `↩️ ESCANEO DESHECHO: EXP. ${restaurado.id}`,
+                    title: `↩️ ESCANEO DESHECHO: EXP. ${idNat}`,
                     subtitle: `Se restauró el estado anterior de ${restaurado.cliente}`
                 });
                 await syncExpedienteCloud(restaurado, true);
             };
 
-            const reiniciarInventarioSede = async () => {
-                if (!confirm(`¿Iniciar un nuevo arqueo de inventario en ${sedeActual}? Esto pondrá todos los expedientes como PENDIENTES de escanear.`)) return;
+            // =====================================================================
+            // CIERRE OFICIAL DE INVENTARIO DEL DÍA CON CONTRASEÑA Y APERTURA NUEVA
+            // =====================================================================
+            const ejecutarCierreInventarioDia = async (e) => {
+                e.preventDefault();
+                if (!passCierreInput.trim()) return alert("Digita tu contraseña personal para firmar el cierre de inventario.");
                 setIsLoading(true);
-                setLoadingMsg('Reiniciando contadores de inventario en la sede...');
+                setLoadingMsg(`Verificando contraseña de ${operadorNombre} y cerrando inventario en ${sedeActual}...`);
                 try {
-                    await fetchGAS({ action: 'resetInventario', sede: sedeActual, usuario: operadorNombre });
-                    setExpedientes(prev => prev.map(e => ({ ...e, invFecha: '', invCajero: '', invSesion: '' })));
-                    setScanLog([]);
-                    setAlertasEscaneo([]);
-                    setScanFeedback(null);
+                    const data = await fetchGAS({
+                        action: 'cerrarInventarioDia',
+                        sede: sedeActual,
+                        usuario: operadorNombre,
+                        password: passCierreInput.trim(),
+                        observacion: obsCierreInput
+                    });
+                    if (data.status === 'success') {
+                        setCierreInfo(data.cierreInfo);
+                        setModalCierreInv(false);
+                        setPassCierreInput('');
+                        setCameraActive(false);
+                        playSound('beep');
+                        alert(`🔒 INVENTARIO CERRADO OFICIALMENTE EN ${sedeActual}\n\nFirmado por: ${operadorNombre}\nContabilizados: ${data.cierreInfo.contabilizados} de ${data.cierreInfo.totalBase}\n\nTodos los celulares de la sede han sido notificados.`);
+                    } else {
+                        playSound('alert');
+                        alert(data.message || 'No se pudo cerrar el inventario.');
+                    }
+                } catch (err) {
+                    alert('❌ Error de conexión al cerrar el inventario.');
+                }
+                setIsLoading(false);
+            };
+
+            const iniciarNuevaSesionInventario = async () => {
+                if (!confirm(`¿Iniciar una NUEVA SESIÓN de inventario en ${sedeActual}?\n\nEsto limpiará las marcas del conteo anterior y dejará el contador en 0 / ${expedientes.length} para todos los cajeros de la sede.`)) return;
+                setIsLoading(true);
+                setLoadingMsg('Abriendo nueva sesión de inventario para toda la sede...');
+                try {
+                    const data = await fetchGAS({
+                        action: 'abrirNuevaSesionInventario',
+                        sede: sedeActual,
+                        usuario: operadorNombre
+                    });
+                    if (data.status === 'success') {
+                        recentLocalScansRef.current = {};
+                        setExpedientes(prev => prev.map(e => ({ ...e, invFecha: '', invCajero: '', invSesion: '' })));
+                        setCierreInfo(data.cierreInfo || { cerrado: false });
+                        setScanLog([]);
+                        setAlertasEscaneo([]);
+                        setScanFeedback(null);
+                        playSound('beep');
+                    }
                 } catch (e) {
-                    alert('Error al reiniciar el inventario.');
+                    alert('Error al abrir nueva sesión de inventario.');
                 }
                 setIsLoading(false);
             };
 
             // =====================================================================
-            // CÁLCULO DE BLOQUES DE ESTANTE (EJ. DEL 1 AL 50, 51 AL 100, ETC.)
+            // CÁLCULO EN VIVO DE CONTADORES, CAJEROS PARTICIPANTES Y BLOQUES (1-50)
             // =====================================================================
-            const hoySesionId = getHoyId();
-            const totalContabilizadosHoy = expedientes.filter(e => e.invSesion === hoySesionId && e.invFecha).length;
+            const totalContabilizadosHoy = React.useMemo(() => {
+                return expedientes.filter(e => estaContabilizadoEnSesion(e)).length;
+            }, [expedientes]);
 
-            // Determinar el número máximo de expediente en la sede para armar botones de bloques dinámicos
+            const desglosePorCajeroVivo = React.useMemo(() => {
+                const mapa = {};
+                expedientes.forEach(e => {
+                    if (estaContabilizadoEnSesion(e)) {
+                        const cj = String(e.invCajero || 'CAJA').toUpperCase();
+                        mapa[cj] = (mapa[cj] || 0) + 1;
+                    }
+                });
+                return Object.entries(mapa);
+            }, [expedientes]);
+
             const maxNumExpediente = React.useMemo(() => {
                 let max = 50;
                 expedientes.forEach(e => {
@@ -813,14 +926,14 @@
 
             const bloquesPredefinidos = React.useMemo(() => {
                 const arr = [];
-                const limite = Math.min(maxNumExpediente, 2000);
+                const limite = Math.min(maxNumExpediente, 2500);
                 for (let ini = 1; ini <= limite; ini += bloqueTamano) {
                     const fin = ini + bloqueTamano - 1;
                     const expsEnBloque = expedientes.filter(e => {
                         const n = parseInt(normalizarIdNatural(e.id), 10);
                         return !isNaN(n) && n >= ini && n <= fin;
                     });
-                    const listos = expsEnBloque.filter(e => e.invSesion === hoySesionId && e.invFecha).length;
+                    const listos = expsEnBloque.filter(e => estaContabilizadoEnSesion(e)).length;
                     arr.push({
                         ini,
                         fin,
@@ -830,9 +943,8 @@
                     });
                 }
                 return arr;
-            }, [expedientes, maxNumExpediente, bloqueTamano, hoySesionId]);
+            }, [expedientes, maxNumExpediente, bloqueTamano]);
 
-            // Filtrado en vivo de la tabla de inventario (por Nombre/ID y por Bloque de Estante)
             const expedientesTablaVivo = React.useMemo(() => {
                 let lista = [...expedientes];
                 const d = parseInt(bloqueDesde, 10);
@@ -845,12 +957,11 @@
                         const num = parseInt(normalizarIdNatural(e.id), 10);
                         return !isNaN(num) && num >= minR && num <= maxR;
                     });
-                    // Ordenar numéricamente del menor al mayor dentro del bloque
                     lista.sort((a, b) => parseInt(normalizarIdNatural(a.id), 10) - parseInt(normalizarIdNatural(b.id), 10));
                 }
 
                 if (soloFaltantesBloque) {
-                    lista = lista.filter(e => !(e.invSesion === hoySesionId && e.invFecha));
+                    lista = lista.filter(e => !estaContabilizadoEnSesion(e));
                 }
 
                 if (liveTableSearch.trim() !== '') {
@@ -862,9 +973,8 @@
                     });
                 }
                 return lista;
-            }, [expedientes, bloqueDesde, bloqueHasta, soloFaltantesBloque, liveTableSearch, hoySesionId]);
+            }, [expedientes, bloqueDesde, bloqueHasta, soloFaltantesBloque, liveTableSearch]);
 
-            // Detectar qué números exactos faltan escanear dentro del bloque seleccionado
             const resumenBloqueActivo = React.useMemo(() => {
                 const d = parseInt(bloqueDesde, 10);
                 const h = parseInt(bloqueHasta, 10);
@@ -874,8 +984,9 @@
                     const num = parseInt(normalizarIdNatural(e.id), 10);
                     return !isNaN(num) && num >= d && num <= h;
                 });
-                const escaneados = enRango.filter(e => e.invSesion === hoySesionId && e.invFecha);
-                const pendientes = enRango.filter(e => !(e.invSesion === hoySesionId && e.invFecha));
+                const escaneados = enRango.filter(e => estaContabilizadoEnSesion(e));
+                const pendientes = enRango.filter(e => !estaContabilizadoEnSesion(e));
+                pendientes.sort((a, b) => parseInt(normalizarIdNatural(a.id), 10) - parseInt(normalizarIdNatural(b.id), 10));
 
                 return {
                     desde: d,
@@ -886,10 +997,10 @@
                     completo: enRango.length > 0 && pendientes.length === 0,
                     listaPendientes: pendientes.map(p => `${normalizarIdNatural(p.id)} (${p.cliente.split(' ')[0]})`)
                 };
-            }, [expedientes, bloqueDesde, bloqueHasta, hoySesionId]);
+            }, [expedientes, bloqueDesde, bloqueHasta]);
 
             // =====================================================================
-            // REGISTRO, CATEGORIZACIÓN Y EDICIÓN DE EXPEDIENTES (DNI = NO IDENTIFICADO)
+            // REGISTRO, EDICIÓN Y CARGA CSV (HABILITADO PARA CAJA, ADMIN Y GERENTE)
             // =====================================================================
             const [formInv, setFormInv] = React.useState({ idExp: '', cliente: '', estadoCredito: 'ACTIVO', asesorTitular: '', categoriaExtra: '', generarTicket: true });
             const [editMode, setEditMode] = React.useState(null);
@@ -898,7 +1009,7 @@
 
             const registrarExpediente = async (e) => {
                 e.preventDefault();
-                if (!puedeOperarCaja) return;
+                if (!puedeGestionarBase) return;
                 if (!formInv.asesorTitular) return alert("Debes seleccionar un Asesor Titular.");
                 if (!formInv.idExp) return alert("Ingresa el N° de Expediente.");
                 
@@ -912,7 +1023,7 @@
                 }
 
                 const nuevo = {
-                    id: idNatural, // Se guarda como número natural para coincidir con tu base
+                    id: idNatural,
                     dni: 'NO IDENTIFICADO',
                     cliente: formInv.cliente.toUpperCase().trim(),
                     estadoCredito: formInv.estadoCredito, 
@@ -937,10 +1048,10 @@
                 alert(`✅ Expediente N° ${idNatural} registrado en la nube.`);
             };
 
-            const guardarEdicionGerencial = async (expActual) => {
-                if (!esGerente || !editMode) return;
+            const guardarEdicionExpediente = async (expActual) => {
+                if (!puedeEditarBase || !editMode) return;
                 setIsLoading(true);
-                setLoadingMsg('Actualizando categorización y datos del expediente...');
+                setLoadingMsg('Guardando cambios del expediente en Google Sheets...');
                 try {
                     const data = await fetchGAS({
                         action: 'editarCategorizacion',
@@ -958,7 +1069,7 @@
                         const nuevoHist = [...(expActual.historial || [])];
                         nuevoHist.unshift({
                             fecha: ahora,
-                            accion: `EDICIÓN GERENCIAL (${operadorNombre})`,
+                            accion: `EDICIÓN (${operadorNombre})`,
                             detalle: `Estado: ${editMode.nuevoEstado} | Titular: ${editMode.nuevoAsesor} | Ubic: ${editMode.nuevaUbicacion}`
                         });
                         const actualizado = {
@@ -972,7 +1083,11 @@
                             historial: nuevoHist
                         };
                         setExpedientes(expedientes.map(x => normalizarIdNatural(x.id) === normalizarIdNatural(expActual.id) ? actualizado : x));
+                        if (editMode.nuevoAsesor && editMode.nuevoAsesor !== 'POR DEFINIR' && !asesores.includes(editMode.nuevoAsesor)) {
+                            setAsesores([...asesores, editMode.nuevoAsesor]);
+                        }
                         setEditMode(null);
+                        playSound('beep');
                     } else {
                         alert(`❌ Error: ${data.message}`);
                     }
@@ -1028,7 +1143,7 @@
             };
 
             // =====================================================================
-            // FILTROS Y BUSCADOR DE SEDE (DASHBOARD / ADMINISTRADORES / GERENTES)
+            // FILTROS Y BUSCADOR DE SEDE (DASHBOARD)
             // =====================================================================
             const [dashSearchQuery, setDashSearchQuery] = React.useState('');
             const [dashFilterAsesor, setDashFilterAsesor] = React.useState('TODOS');
@@ -1050,10 +1165,10 @@
             if (dashFilterEstado !== 'TODOS') listaDash = listaDash.filter(e => e.estadoCredito === dashFilterEstado);
             if (dashFiltroUbicacion === 'CAJA') listaDash = listaDash.filter(e => e.ubicacionFisica.includes('CAJA'));
             if (dashFiltroUbicacion === 'CAMPO') listaDash = listaDash.filter(e => !e.ubicacionFisica.includes('CAJA'));
-            if (dashFiltroInv === 'CONTABILIZADO') listaDash = listaDash.filter(e => e.invSesion === hoySesionId && e.invFecha);
-            if (dashFiltroInv === 'FALTANTE') listaDash = listaDash.filter(e => !(e.invSesion === hoySesionId && e.invFecha));
+            if (dashFiltroInv === 'CONTABILIZADO') listaDash = listaDash.filter(e => estaContabilizadoEnSesion(e));
+            if (dashFiltroInv === 'FALTANTE') listaDash = listaDash.filter(e => !estaContabilizadoEnSesion(e));
 
-            // EXPORTACIÓN CSV Y PDF DE REPORTES (SOLO GERENTES)
+            // EXPORTACIÓN CSV Y PDF (SOLO GERENTES)
             const exportarCSV = (soloSeleccionFiltrada = false) => {
                 if (!puedeExportar) return alert("⛔ Solo los Gerentes tienen autorización para exportar registros.");
                 const fuente = soloSeleccionFiltrada ? listaDash : expedientes;
@@ -1091,7 +1206,7 @@
                         e.estadoCredito,
                         e.asesorTitular,
                         e.ubicacionFisica,
-                        (e.invSesion === hoySesionId && e.invFecha) ? `REGISTRADO (${e.invCajero})` : 'PENDIENTE'
+                        estaContabilizadoEnSesion(e) ? `REGISTRADO (${e.invCajero})` : 'PENDIENTE'
                     ]);
                     doc.autoTable({
                         startY: 38, head: [['N° EXP', 'CLIENTE', 'ESTADO', 'TITULAR', 'UBICACIÓN FÍSICA', 'INVENTARIO HOY']],
@@ -1106,7 +1221,7 @@
                             ['Prestados / En Campo (Fuera de Caja)', listaDash.filter(e => !e.ubicacionFisica.includes('CAJA')).length],
                             ['Estado Crediticio: ACTIVO', listaDash.filter(e => e.estadoCredito === 'ACTIVO').length],
                             ['Estado Crediticio: MORA DURA / LISTA NEGRA', listaDash.filter(e => e.estadoCredito === 'MORA DURA' || e.estadoCredito === 'LISTA NEGRA').length],
-                            ['Inventario QR Registrado Hoy', listaDash.filter(e => e.invSesion === hoySesionId && e.invFecha).length]
+                            ['Inventario QR Registrado en Sesión', listaDash.filter(e => estaContabilizadoEnSesion(e)).length]
                         ], theme: 'grid', styles: { fontSize: 10 }, headStyles: { fillColor: [89, 180, 71] }
                     });
                 }
@@ -1129,8 +1244,9 @@
                 return result.map(s => s.replace(/^"|"$/g, '').trim());
             };
 
+            // IMPORTAR CSV HABILITADO PARA CAJA, ADMINISTRADORES Y GERENTES
             const importarCSV = async (e) => {
-                if (!puedeOperarCaja) return;
+                if (!puedeGestionarBase) return;
                 const file = e.target.files[0];
                 if (!file) return;
                 const reader = new FileReader();
@@ -1144,11 +1260,10 @@
                         const cols = parseCSVLine(lines[i]);
                         if (cols.length >= 2) {
                             const idNatural = normalizarIdNatural(cols[0]);
-                            // Si el CSV tiene 5+ columnas (ID, DNI, Cliente, Estado, Asesor) o 4 columnas sin DNI (ID, Cliente, Estado, Asesor)
                             const tieneColDNI = cols.length >= 5;
                             const cliente = (tieneColDNI ? cols[2] : cols[1] || '').toUpperCase().trim();
                             const estado = (tieneColDNI ? cols[3] : cols[2] || 'ACTIVO').toUpperCase().trim();
-                            const asesor = (tieneColDNI ? cols[4] : cols[3] || 'SIN ASIGNAR').toUpperCase().trim();
+                            const asesor = (tieneColDNI ? cols[4] : cols[3] || 'POR DEFINIR').toUpperCase().trim();
                             const ubicacionFisica = (tieneColDNI && cols[5] ? cols[5] : 'CAJA (ARCHIVO)').toUpperCase().trim();
                             const fechaUltimoMov = getFechaHora();
 
@@ -1158,7 +1273,7 @@
                                     dni: 'NO IDENTIFICADO',
                                     cliente,
                                     estadoCredito: estado || 'ACTIVO',
-                                    asesorTitular: asesor,
+                                    asesorTitular: asesor || 'POR DEFINIR',
                                     ubicacionFisica,
                                     fechaUltimoMov,
                                     historial: [{ fecha: fechaUltimoMov, accion: 'MIGRACIÓN CSV', detalle: `Cargado por ${operadorNombre}` }],
@@ -1167,7 +1282,7 @@
                                 nuevos.push(exp);
                                 listaParaLaNube.push(exp);
                                 count++;
-                                if (asesor && !nuevosAsesores.includes(asesor)) nuevosAsesores.push(asesor);
+                                if (asesor && asesor !== 'POR DEFINIR' && !nuevosAsesores.includes(asesor)) nuevosAsesores.push(asesor);
                             }
                         }
                     }
@@ -1177,14 +1292,15 @@
                         setLoadingMsg('Subiendo lote masivo a Google Sheets...');
                         await fetchGAS({ action: 'bulkSave', sede: sedeActual, usuario: operadorNombre, data: listaParaLaNube });
                         setIsLoading(false);
-                        alert(`✅ Carga Exitosa: Se migraron ${count} expedientes a ${sedeActual} (DNI rellenado con NO IDENTIFICADO).`);
+                        playSound('beep');
+                        alert(`✅ Carga Exitosa: Se integraron ${count} expedientes a ${sedeActual}.`);
                     }
                 };
                 reader.readAsText(file); e.target.value = '';
             };
 
             // =====================================================================
-            // GENERADOR DE TICKETS QR + EXPORTADOR NATIVO A PDF A4 (SIN DESCUADRES)
+            // GENERADOR DE TICKETS QR + EXPORTADOR NATIVO A PDF A4
             // =====================================================================
             const [manualId, setManualId] = React.useState('');
             const [manualCliente, setManualCliente] = React.useState('');
@@ -1251,7 +1367,6 @@
                 alert(`✅ Se generaron ${generados.length} etiquetas QR listas para imprimir.`);
             };
 
-            // DESCARGAR TICKETS DIRECTAMENTE EN UN PDF A4 VECTORIAL EXACTO (SOLUCIÓN DEFINITIVA A IMAGEN 2)
             const descargarTicketsPDFExacto = () => {
                 if (ticketsQueue.length === 0) return alert("Primero añade etiquetas a la cola de impresión.");
                 const { jsPDF } = window.jspdf;
@@ -1259,7 +1374,7 @@
 
                 const marginX = 5;
                 const marginY = 6;
-                const colWidth = 50; // 4 columnas x 50mm = 200mm (centrado en A4 de 210mm)
+                const colWidth = 50;
                 const rowHeight = Math.min(46, Math.max(36, printConfig.ticketHeightMm || 40));
 
                 printPages.forEach((page, pageIndex) => {
@@ -1271,7 +1386,6 @@
                         const x = marginX + col * colWidth;
                         const y = marginY + row * rowHeight;
 
-                        // Borde exterior de la celda
                         doc.setDrawColor(0, 0, 0);
                         doc.setLineWidth(0.45);
                         doc.rect(x, y, colWidth, rowHeight);
@@ -1281,7 +1395,6 @@
                         const bodyY = y + headerH;
                         const bodyH = rowHeight - headerH - footerH;
 
-                        // Barra superior de Sede
                         if (printConfig.showHeaderSede) {
                             doc.line(x, y + headerH, x + colWidth, y + headerH);
                             if (!t.isEmpty) {
@@ -1294,11 +1407,9 @@
                             }
                         }
 
-                        // Línea divisoria del código rojo inferior
                         doc.line(x, y + rowHeight - footerH, x + colWidth, y + rowHeight - footerH);
 
                         if (!t.isEmpty) {
-                            // Generar imagen QR de alta definición en memoria
                             const qrCanvas = document.createElement('canvas');
                             new window.QRious({
                                 element: qrCanvas,
@@ -1310,8 +1421,6 @@
                                 padding: 20
                             });
                             const qrDataUrl = qrCanvas.toDataURL('image/png');
-
-                            // Convertir tamaño px a mm proporcional para que quepa perfecto en la celda de 50mm
                             const qrMm = Math.min(bodyH - 1.5, Math.max(15, (printConfig.qrSize / 70) * 19.5));
 
                             if (printConfig.qrPosition === 'IZQUIERDA' || printConfig.qrPosition === 'DERECHA') {
@@ -1319,7 +1428,6 @@
                                 const qrY = bodyY + (bodyH - qrMm) / 2;
                                 doc.addImage(qrDataUrl, 'PNG', qrX, qrY, qrMm, qrMm);
 
-                                // Área libre para el Nombre del Cliente (sin partir palabras jamás)
                                 const textAreaX = printConfig.qrPosition === 'IZQUIERDA' ? (x + qrMm + 1.8) : (x + 1.5);
                                 const textAreaW = colWidth - qrMm - 3.2;
                                 const textCenterX = textAreaX + (textAreaW / 2);
@@ -1327,7 +1435,6 @@
                                 doc.setFont("helvetica", "bold");
                                 doc.setTextColor(0, 0, 0);
 
-                                // Auto-ajuste de fuente para que ninguna palabra exceda textAreaW
                                 let fontPt = printConfig.fontSizeCliente > 0 ? (printConfig.fontSizeCliente * 0.72) : 9.5;
                                 doc.setFontSize(fontPt);
                                 let lineas = doc.splitTextToSize(String(t.cliente || ''), textAreaW);
@@ -1354,12 +1461,10 @@
                                 const lin = doc.splitTextToSize(String(t.cliente || ''), colWidth - 3);
                                 doc.text(lin[0] || '', x + colWidth / 2, bodyY + qrSmall + 3.8, { align: "center" });
                             } else {
-                                // GIGANTE
                                 const qrBig = Math.min(colWidth - 4, bodyH - 1.5);
                                 doc.addImage(qrDataUrl, 'PNG', x + (colWidth - qrBig) / 2, bodyY + (bodyH - qrBig) / 2, qrBig, qrBig);
                             }
 
-                            // Código Rojo Inferior
                             doc.setFont("helvetica", "bold");
                             doc.setFontSize(Math.min(22, (printConfig.fontSizeCodigo || 24) * 0.78));
                             doc.setTextColor(220, 38, 38);
@@ -1477,7 +1582,7 @@
                 <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4 modal-bg no-print">
                     <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden flex flex-col max-h-[85vh]">
                         <div className="p-4 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
-                            <div><h3 className="font-bold text-slate-800">Historial Inalterable</h3><p className="text-xs text-slate-500">{exp.cliente} | Exp: {exp.id} ({formatearConCeros(exp.id)})</p></div>
+                            <div><h3 className="font-bold text-slate-800">Historial Inalterable</h3><p className="text-xs text-slate-500">{exp.cliente} | Exp: {normalizarIdNatural(exp.id)} ({formatearConCeros(exp.id)})</p></div>
                             <button onClick={onClose} className="text-slate-400 hover:text-red-500 p-2"><i className="fa-solid fa-xmark fa-xl"></i></button>
                         </div>
                         <div className="p-6 overflow-y-auto flex-1 space-y-4">
@@ -1494,7 +1599,6 @@
                 </div>
             );
 
-            // MODAL TUTORIAL (i) PARA NUEVOS USUARIOS
             const ModalAyudaTutorial = ({ info, onClose }) => (
                 <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 modal-bg no-print">
                     <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border-t-4 border-blue-600">
@@ -1537,7 +1641,7 @@
                                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 240"><g fill="#59B447"><rect x="90" y="8" width="24" height="13" rx="6.5"/><rect x="71" y="31" width="61" height="13" rx="6.5"/><rect x="50" y="55" width="74" height="13" rx="6.5"/><rect x="31" y="79" width="75" height="13" rx="6.5"/><rect x="24" y="103" width="63" height="13" rx="6.5"/><path d="M143 55 C141 78 130 95 111 107 C96 117 81 122 72 134 C62 147 63 166 70 181 C76 195 87 208 97 216 C107 201 118 189 131 177 C144 166 157 156 164 141 C173 123 173 104 168 89 C164 74 156 62 143 55 Z"/></g></svg>
                             </div>
                             <h1 className="text-[#59B447] font-bold text-3xl tracking-widest mb-1" style={{ fontFamily: "Georgia" }}>CREDIBAN</h1>
-                            <p className="text-slate-400 text-xs tracking-wider uppercase mb-2">Control de Expedientes & QR (V21)</p>
+                            <p className="text-slate-400 text-xs tracking-wider uppercase mb-2">Control de Expedientes & QR (V22)</p>
                             <div className="inline-flex items-center gap-1.5 bg-slate-800/80 border border-slate-700 text-slate-300 text-[10px] font-bold px-3 py-1 rounded-full mb-6">
                                 <i className="fa-solid fa-shield-halved text-[#59B447]"></i>
                                 Acceso exclusivo: Cajeros • Administradores • Gerentes
@@ -1554,7 +1658,7 @@
                                     <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5 ml-1">Usuario</label>
                                     <div className="relative">
                                         <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-500"><i className="fa-solid fa-user-lock"></i></div>
-                                        <input type="text" required value={usuarioInput} onChange={e=>setUsuarioInput(e.target.value)} className="w-full pl-12 p-3.5 bg-slate-900/50 border border-slate-700/50 rounded-2xl focus:ring-2 focus:ring-[#59B447] outline-none text-white font-bold uppercase" placeholder="Ej. NOMBRE.A" />
+                                        <input type="text" required value={usuarioInput} onChange={e=>setUsuarioInput(e.target.value)} className="w-full pl-12 p-3.5 bg-slate-900/50 border border-slate-700/50 rounded-2xl focus:ring-2 focus:ring-[#59B447] outline-none text-white font-bold uppercase" placeholder="Ej. JOSE.S" />
                                     </div>
                                 </div>
 
@@ -1601,7 +1705,78 @@
 
                     {helpModal && <ModalAyudaTutorial info={helpModal} onClose={() => setHelpModal(null)} />}
                     {historialVisible && <ModalHistorial exp={historialVisible} onClose={() => setHistorialVisible(null)} />}
-                    {puedeOperarCaja && <input type="file" accept=".csv" className="hidden no-print" ref={csvInputRef} onChange={importarCSV} />}
+                    {puedeGestionarBase && <input type="file" accept=".csv" className="hidden no-print" ref={csvInputRef} onChange={importarCSV} />}
+
+                    {/* MODAL DE CIERRE OFICIAL DE INVENTARIO DEL DÍA CON CONTRASEÑA */}
+                    {modalCierreInv && (
+                        <div className="fixed inset-0 bg-slate-900/65 backdrop-blur-sm flex items-center justify-center z-50 p-4 modal-bg no-print">
+                            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden border-t-4 border-slate-900">
+                                <div className="p-5 bg-slate-900 text-white flex justify-between items-center">
+                                    <div>
+                                        <h3 className="font-black text-base uppercase text-[#59B447]"><i className="fa-solid fa-lock mr-1.5"></i> Cierre Oficial de Inventario ({sedeActual})</h3>
+                                        <p className="text-[11px] text-slate-300">Se cerrará la sesión para todos los cajeros de la sede.</p>
+                                    </div>
+                                    <button onClick={() => setModalCierreInv(false)} className="text-slate-400 hover:text-white"><i className="fa-solid fa-xmark fa-lg"></i></button>
+                                </div>
+                                <form onSubmit={ejecutarCierreInventarioDia} className="p-6 space-y-4">
+                                    <div className="grid grid-cols-3 gap-2 text-center">
+                                        <div className="bg-slate-100 p-2.5 rounded-xl">
+                                            <p className="text-[10px] font-bold text-slate-500 uppercase">Total Sede</p>
+                                            <p className="text-xl font-black text-slate-800">{expedientes.length}</p>
+                                        </div>
+                                        <div className="bg-green-100 p-2.5 rounded-xl">
+                                            <p className="text-[10px] font-bold text-green-700 uppercase">Verificados</p>
+                                            <p className="text-xl font-black text-green-700">{totalContabilizadosHoy}</p>
+                                        </div>
+                                        <div className="bg-amber-100 p-2.5 rounded-xl">
+                                            <p className="text-[10px] font-bold text-amber-800 uppercase">Faltantes</p>
+                                            <p className="text-xl font-black text-amber-800">{expedientes.length - totalContabilizadosHoy}</p>
+                                        </div>
+                                    </div>
+
+                                    {desglosePorCajeroVivo.length > 0 && (
+                                        <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
+                                            <p className="text-[10px] font-black text-slate-500 uppercase mb-1.5">Conteo por Cajero en esta Sesión:</p>
+                                            <div className="flex flex-wrap gap-1.5">
+                                                {desglosePorCajeroVivo.map(([cj, cant]) => (
+                                                    <span key={cj} className="bg-white border border-slate-300 px-2.5 py-1 rounded-lg text-xs font-bold text-slate-700">
+                                                        <i className="fa-solid fa-user-check text-[#59B447] mr-1"></i> {cj}: <span className="font-black text-slate-900">{cant}</span>
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    <div>
+                                        <label className="block text-[10px] font-black text-slate-500 uppercase mb-1">Observación de Cierre</label>
+                                        <input type="text" value={obsCierreInput} onChange={e => setObsCierreInput(e.target.value.toUpperCase())} className="w-full p-2.5 border border-slate-300 rounded-xl text-xs font-bold uppercase" />
+                                    </div>
+
+                                    <div className="bg-blue-50 p-3.5 rounded-xl border border-blue-200">
+                                        <label className="block text-[11px] font-black text-blue-900 uppercase mb-1.5">
+                                            <i className="fa-solid fa-key mr-1"></i> Confirma con tu Contraseña ({operadorNombre}):
+                                        </label>
+                                        <input
+                                            type="password"
+                                            required
+                                            autoFocus
+                                            value={passCierreInput}
+                                            onChange={e => setPassCierreInput(e.target.value)}
+                                            placeholder="Digita tu contraseña aquí..."
+                                            className="w-full p-3 bg-white border border-blue-300 rounded-xl text-sm font-mono tracking-widest outline-none focus:ring-2 focus:ring-blue-600"
+                                        />
+                                    </div>
+
+                                    <div className="flex gap-2 pt-2">
+                                        <button type="button" onClick={() => setModalCierreInv(false)} className="flex-1 bg-slate-200 text-slate-700 font-bold py-3 rounded-xl text-xs">Cancelar</button>
+                                        <button type="submit" className="flex-1 bg-slate-900 text-white font-black py-3 rounded-xl text-xs shadow-lg hover:bg-slate-800">
+                                            <i className="fa-solid fa-file-signature text-[#59B447] mr-1"></i> Firmar y Cerrar Inventario
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    )}
 
                     {modalReporte && puedeExportar && (
                         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4 modal-bg no-print">
@@ -1677,11 +1852,11 @@
                                     </button>
                                 )}
                                 <button onClick={()=>setView('dashboard')} className={`pb-2 whitespace-nowrap ${view==='dashboard'?'tab-active':''}`}>
-                                    <i className="fa-solid fa-magnifying-glass-chart mr-1"></i> {esAdmin ? `Consulta y Filtros (${sedeActual})` : 'Buscador & Dashboard'}
+                                    <i className="fa-solid fa-magnifying-glass-chart mr-1"></i> Buscador & Filtros ({sedeActual})
                                 </button>
-                                {puedeOperarCaja && (
+                                {puedeGestionarBase && (
                                     <button onClick={()=>setView('inventario')} className={`pb-2 whitespace-nowrap ${view==='inventario'?'tab-active':''}`}>
-                                        <i className="fa-solid fa-database mr-1"></i> {esGerente ? 'Base de Datos y Edición Total' : 'Registro de Expedientes'}
+                                        <i className="fa-solid fa-database mr-1"></i> Base de Datos, Edición & CSV
                                     </button>
                                 )}
                                 {puedeOperarCaja && (
@@ -1699,8 +1874,31 @@
                     </header>
 
                     <main className="p-4 max-w-7xl mx-auto w-full flex-1 mt-2">
+                        {/* BANNER GLOBAL DE ESTADO DE CIERRE DE INVENTARIO (SINCRONIZADO EN TODOS LOS CELULARES) */}
+                        {cierreInfo && cierreInfo.cerrado && (view === 'escaner' || view === 'dashboard') && (
+                            <div className="mb-4 bg-slate-900 text-white p-4 rounded-2xl shadow-lg border-l-4 border-[#59B447] flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 no-print animate-fade-in">
+                                <div>
+                                    <div className="flex items-center gap-2">
+                                        <span className="bg-[#59B447] text-white text-[10px] font-black px-2.5 py-0.5 rounded-full uppercase">Cierre Oficial Registrado</span>
+                                        <span className="text-xs font-bold text-slate-300">{cierreInfo.fecha}</span>
+                                    </div>
+                                    <p className="text-sm font-black mt-1">
+                                        🔒 Inventario de {sedeActual} cerrado por <span className="text-[#59B447]">{cierreInfo.cajero}</span> — Contabilizados: {cierreInfo.contabilizados} de {cierreInfo.totalBase} (Faltantes: {cierreInfo.faltantes})
+                                    </p>
+                                    {cierreInfo.desgloseCajeros && (
+                                        <p className="text-[11px] text-slate-400 font-semibold mt-0.5">Participación: {cierreInfo.desgloseCajeros} | Obs: {cierreInfo.observacion}</p>
+                                    )}
+                                </div>
+                                {puedeOperarCaja && (
+                                    <button onClick={iniciarNuevaSesionInventario} className="bg-[#59B447] hover:bg-green-600 text-white font-black px-4 py-2.5 rounded-xl text-xs whitespace-nowrap shadow">
+                                        <i className="fa-solid fa-lock-open mr-1.5"></i> Iniciar Nueva Sesión de Inventario
+                                    </button>
+                                )}
+                            </div>
+                        )}
+
                         {/* ===================================================================== */}
-                        {/* 1. ESCÁNER QR RÁFAGA + INSPECTOR DE BLOQUES DE ESTANTE (1 AL 50, ETC) */}
+                        {/* 1. ESCÁNER QR RÁFAGA + CIERRE OFICIAL + BLOQUES DE ESTANTE            */}
                         {/* ===================================================================== */}
                         {view === 'escaner' && puedeOperarCaja && (
                             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 animate-fade-in no-print">
@@ -1710,17 +1908,17 @@
                                             <div className="flex items-center">
                                                 <h2 className="font-black text-slate-800 text-base uppercase"><i className="fa-solid fa-bolt text-[#59B447] mr-1"></i> Escáner QR Ráfaga</h2>
                                                 <HelpButton
-                                                    title="Cómo usar el Escáner QR en Ráfaga"
+                                                    title="Cómo usar el Escáner Multicajero y Cierre del Día"
                                                     steps={[
-                                                        "Elige arriba el modo: '1. INVENTARIO' (para contar carpetas en el estante), '2. RETORNO CAJA' (cuando el asesor devuelve carpetas) o '3. SALIDA LOTE' (para prestar varias carpetas a un asesor).",
-                                                        "El lector reconoce automáticamente tanto números naturales (ej. 7) como códigos con ceros (ej. 001-00007).",
-                                                        "Escucharás un sonido fuerte de caja registradora al registrar con éxito y una alarma grave si un expediente no existe o se repite."
+                                                        "2 o más cajeros pueden escanear al mismo tiempo. Cada carpeta escaneada suma al contador general en vivo y bloquea duplicados automáticamente.",
+                                                        "Al terminar de revisar el estante, cualquiera de los cajeros toca el botón negro 'Cerrar Inventario del Día', digita su contraseña y el inventario queda cerrado para toda la sede.",
+                                                        "Cuando deseen hacer un nuevo inventario otro día, tocan 'Iniciar Nueva Sesión' para poner el contador en cero."
                                                     ]}
                                                     onOpen={setHelpModal}
                                                 />
                                             </div>
-                                            <span className="text-[11px] font-bold bg-slate-100 px-2.5 py-1 rounded-full text-slate-700">
-                                                Total Hoy: <span className="text-[#59B447] font-black">{totalContabilizadosHoy} / {expedientes.length}</span>
+                                            <span className="text-[11px] font-bold bg-green-50 border border-green-200 px-2.5 py-1 rounded-full text-slate-800">
+                                                Registrados: <span className="text-[#59B447] font-black">{totalContabilizadosHoy} / {expedientes.length}</span>
                                             </span>
                                         </div>
 
@@ -1784,7 +1982,7 @@
                                         )}
 
                                         <form onSubmit={(e) => { e.preventDefault(); procesarLecturaQR(lectorFisicoInput); setLectorFisicoInput(''); }} className="mt-4 flex gap-2">
-                                            <input type="text" value={lectorFisicoInput} onChange={e => setLectorFisicoInput(e.target.value)} placeholder="Pistola USB o digita N° Exp (ej. 7 o 001-00007) y Enter..." className="flex-1 p-2.5 border border-slate-300 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#59B447]" />
+                                            <input type="text" value={lectorFisicoInput} onChange={e => setLectorFisicoInput(e.target.value)} placeholder="Pistola USB o digita N° Exp (ej. 8 o 001-00008) y Enter..." className="flex-1 p-2.5 border border-slate-300 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#59B447]" />
                                             <button type="submit" className="bg-slate-800 text-white px-4 rounded-xl text-xs font-bold">Pasar</button>
                                         </form>
 
@@ -1800,7 +1998,6 @@
                                             </div>
                                         )}
 
-                                        {/* Bitácora de Alertas / Errores recientes para que no se escape ninguno al escanear rápido */}
                                         {alertasEscaneo.length > 0 && (
                                             <div className="mt-3 bg-red-50 border border-red-200 rounded-xl p-3">
                                                 <div className="flex justify-between items-center mb-1.5">
@@ -1818,19 +2015,40 @@
                                             </div>
                                         )}
 
-                                        <div className="flex gap-2 mt-4 pt-3 border-t border-slate-200">
-                                            <button disabled={scanLog.length === 0} onClick={deshacerUltimoEscaneo} className="flex-1 bg-slate-100 disabled:opacity-40 text-slate-700 font-bold py-2 px-3 rounded-xl text-xs hover:bg-slate-200">
-                                                <i className="fa-solid fa-rotate-left mr-1"></i> Deshacer Último
-                                            </button>
-                                            <button onClick={reiniciarInventarioSede} className="bg-red-50 text-red-600 font-bold py-2 px-3 rounded-xl text-xs hover:bg-red-100 border border-red-200">
-                                                <i className="fa-solid fa-broom mr-1"></i> Reiniciar Arqueo
-                                            </button>
+                                        {/* BOTONES DE CONTROL DE INVENTARIO: DESHACER, CERRAR INVENTARIO DEL DÍA E INICIAR NUEVA SESIÓN */}
+                                        <div className="space-y-2 mt-4 pt-3 border-t border-slate-200">
+                                            <div className="flex gap-2">
+                                                <button disabled={scanLog.length === 0} onClick={deshacerUltimoEscaneo} className="flex-1 bg-slate-100 disabled:opacity-40 text-slate-700 font-bold py-2.5 px-3 rounded-xl text-xs hover:bg-slate-200">
+                                                    <i className="fa-solid fa-rotate-left mr-1"></i> Deshacer Último
+                                                </button>
+                                                <button onClick={iniciarNuevaSesionInventario} className="bg-red-50 text-red-600 font-bold py-2.5 px-3 rounded-xl text-xs hover:bg-red-100 border border-red-200">
+                                                    <i className="fa-solid fa-broom mr-1"></i> Nueva Sesión (0/{expedientes.length})
+                                                </button>
+                                            </div>
+
+                                            {!cierreInfo?.cerrado ? (
+                                                <button
+                                                    onClick={() => setModalCierreInv(true)}
+                                                    className="w-full bg-slate-900 hover:bg-slate-800 text-white font-black py-3 px-4 rounded-xl text-xs shadow-md flex items-center justify-center gap-2 transition-all"
+                                                >
+                                                    <i className="fa-solid fa-lock text-[#59B447]"></i>
+                                                    Cerrar Inventario del Día con Contraseña ({totalContabilizadosHoy}/{expedientes.length})
+                                                </button>
+                                            ) : (
+                                                <button
+                                                    onClick={iniciarNuevaSesionInventario}
+                                                    className="w-full bg-[#59B447] hover:bg-green-600 text-white font-black py-3 px-4 rounded-xl text-xs shadow-md flex items-center justify-center gap-2 transition-all"
+                                                >
+                                                    <i className="fa-solid fa-lock-open"></i>
+                                                    Inventario Cerrado — Abrir Nueva Sesión de Inventario
+                                                </button>
+                                            )}
                                         </div>
                                     </div>
                                 </div>
 
                                 {/* COLUMNA DERECHA: TABLA EN VIVO + BUSCADOR DE NOMBRE + INSPECTOR DE BLOQUES (1 AL 50) */}
-                                <div className="lg:col-span-7 glass-card p-5 rounded-2xl flex flex-col h-[780px]">
+                                <div className="lg:col-span-7 glass-card p-5 rounded-2xl flex flex-col h-[790px]">
                                     <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-3 border-b pb-3">
                                         <div className="flex items-center">
                                             <h3 className="font-bold text-slate-800 text-base">
@@ -1840,24 +2058,36 @@
                                             <HelpButton
                                                 title="Cómo revisar por Bloques de Estante (Ej. 1 al 50)"
                                                 steps={[
-                                                    "Cada sede divide sus estantes de forma distinta (de 50 en 50, de 100 en 100 o rangos personalizados). Toca cualquier bloque (ej. '1 - 50') o escribe el rango 'Desde / Hasta'.",
-                                                    "El sistema te dirá al instante si ese bloque está COMPLETO (verde) o cuántos expedientes faltan escanear en esa división.",
-                                                    "Activa el botón 'Ver Solo Faltantes' para ver únicamente las carpetas que aún no han sido escaneadas en ese bloque y evitar que se te pase alguna."
+                                                    "Toca cualquier bloque (ej. '1-50' o '51-100') para verificar si las carpetas de esa división del estante están completas.",
+                                                    "Apenas tú o tu compañero escaneen un expediente, el contador verde 'Registrados' y el bloque subirán automáticamente (ej. 1/50, 2/50).",
+                                                    "Activa el botón 'Filtrar Faltantes' para ver únicamente las carpetas que aún no han sido pasadas en ese bloque."
                                                 ]}
                                                 onOpen={setHelpModal}
                                             />
                                         </div>
                                         <div className="flex gap-1.5">
-                                            <span className="bg-green-100 text-green-800 text-[11px] font-black px-3 py-1 rounded-lg">
+                                            <span className="bg-green-100 text-green-800 text-xs font-black px-3 py-1 rounded-lg">
                                                 Registrados: {totalContabilizadosHoy}
                                             </span>
-                                            <span className="bg-amber-100 text-amber-800 text-[11px] font-black px-3 py-1 rounded-lg">
+                                            <span className="bg-amber-100 text-amber-800 text-xs font-black px-3 py-1 rounded-lg">
                                                 Faltan: {expedientes.length - totalContabilizadosHoy}
                                             </span>
                                         </div>
                                     </div>
 
-                                    {/* PANEL DE CONTROL POR BLOQUES DE ESTANTE (1 AL 50, 51 AL 100, PERSONALIZADO) */}
+                                    {/* Desglose en vivo de cuánto lleva escaneado cada cajero */}
+                                    {desglosePorCajeroVivo.length > 0 && (
+                                        <div className="mb-2.5 flex items-center gap-1.5 flex-wrap bg-emerald-50/80 border border-emerald-200 px-3 py-1.5 rounded-xl">
+                                            <span className="text-[10px] font-black text-emerald-900 uppercase mr-1"><i className="fa-solid fa-users-viewfinder mr-1"></i> Avance por Cajero:</span>
+                                            {desglosePorCajeroVivo.map(([cj, cant]) => (
+                                                <span key={cj} className="bg-white border border-emerald-300 text-emerald-900 text-[10px] font-black px-2 py-0.5 rounded-full">
+                                                    {cj}: {cant} exp.
+                                                </span>
+                                            ))}
+                                        </div>
+                                    )}
+
+                                    {/* PANEL DE CONTROL POR BLOQUES DE ESTANTE */}
                                     <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 mb-3 space-y-2.5">
                                         <div className="flex flex-wrap items-center justify-between gap-2">
                                             <div className="flex items-center gap-1.5">
@@ -1881,7 +2111,6 @@
                                             </div>
                                         </div>
 
-                                        {/* Botones rápidos de Bloques (1-50, 51-100, 101-150...) con indicador verde si están completos */}
                                         <div className="flex gap-1.5 overflow-x-auto pb-1">
                                             {bloquesPredefinidos.map(b => {
                                                 const activo = parseInt(bloqueDesde, 10) === b.ini && parseInt(bloqueHasta, 10) === b.fin;
@@ -1897,7 +2126,7 @@
                                                         }`}
                                                     >
                                                         <span>{b.ini}-{b.fin}</span>
-                                                        <span className={`px-1.5 py-0.2 rounded text-[9px] ${b.completo ? 'bg-green-600 text-white' : 'bg-slate-200 text-slate-700'}`}>
+                                                        <span className={`px-1.5 py-0.2 rounded text-[9px] ${b.completo ? 'bg-green-600 text-white' : b.listos > 0 ? 'bg-emerald-500 text-white' : 'bg-slate-200 text-slate-700'}`}>
                                                             {b.listos}/{b.total}
                                                         </span>
                                                     </button>
@@ -1905,7 +2134,6 @@
                                             })}
                                         </div>
 
-                                        {/* Barra de Estado del Bloque Seleccionado (ej. Del 1 al 50) */}
                                         {resumenBloqueActivo && (
                                             <div className={`p-2.5 rounded-xl border text-xs flex flex-col gap-1 ${resumenBloqueActivo.completo ? 'bg-green-100 border-green-400 text-green-900' : 'bg-amber-50 border-amber-300 text-amber-900'}`}>
                                                 <div className="flex justify-between items-center">
@@ -1929,7 +2157,6 @@
                                             </div>
                                         )}
 
-                                        {/* Buscador en Vivo por Nombre o N° dentro de la Tabla de Inventario */}
                                         <div className="relative">
                                             <i className="fa-solid fa-magnifying-glass absolute left-3 top-2.5 text-slate-400 text-xs"></i>
                                             <input
@@ -1959,9 +2186,9 @@
                                             </thead>
                                             <tbody>
                                                 {expedientesTablaVivo.map(e => {
-                                                    const yaRegistrado = e.invSesion === hoySesionId && e.invFecha;
+                                                    const yaRegistrado = estaContabilizadoEnSesion(e);
                                                     return (
-                                                        <tr key={e.id} className={`border-b transition-colors ${yaRegistrado ? 'bg-green-50/60' : 'hover:bg-slate-50'}`}>
+                                                        <tr key={e.id} className={`border-b transition-colors ${yaRegistrado ? 'bg-green-50/70' : 'hover:bg-slate-50'}`}>
                                                             <td className="p-3">
                                                                 <p className="font-bold text-slate-800 text-xs">{e.cliente}</p>
                                                                 <p className="text-[11px] text-blue-600 font-black">
@@ -1974,7 +2201,7 @@
                                                                         <span className="inline-flex items-center gap-1 bg-green-600 text-white text-[10px] font-black px-2.5 py-1 rounded-full shadow-sm">
                                                                             <i className="fa-solid fa-check-double"></i> INVENTARIO REGISTRADO
                                                                         </span>
-                                                                        <p className="text-[10px] text-slate-500 font-bold mt-1">
+                                                                        <p className="text-[10px] text-slate-600 font-bold mt-1">
                                                                             Por: {e.invCajero} ({e.invFecha})
                                                                         </p>
                                                                     </div>
@@ -2015,7 +2242,7 @@
                                     <HelpButton
                                         title="Cómo prestar o devolver un expediente sin QR"
                                         steps={[
-                                            "Escribe el número natural del expediente (ej. 7), el código completo (001-00007) o parte del nombre del cliente.",
+                                            "Escribe el número natural del expediente (ej. 8), el código completo (001-00008) o parte del nombre del cliente.",
                                             "Toca el cliente en la lista desplegable.",
                                             "Si está en CAJA, elige al asesor y presiona 'Registrar Salida'. Si ya estaba prestado a un asesor, presiona 'Retornar a Caja Central'."
                                         ]}
@@ -2025,12 +2252,12 @@
                                 <div className="glass-card p-6 rounded-2xl mb-6 border-l-4 border-blue-500 relative z-20">
                                     <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Buscar Cliente (Nombre o N° Exp)</label>
                                     <div className="relative">
-                                        <input type="text" value={movBusqueda} onChange={handleLiveSearch} className="w-full p-3 border border-blue-200 rounded-xl outline-none font-bold bg-white text-blue-900 shadow-inner focus:ring-2 focus:ring-blue-400" placeholder="Ej: CARLOS o 7..." />
+                                        <input type="text" value={movBusqueda} onChange={handleLiveSearch} className="w-full p-3 border border-blue-200 rounded-xl outline-none font-bold bg-white text-blue-900 shadow-inner focus:ring-2 focus:ring-blue-400" placeholder="Ej: CARLOS o 8..." />
                                         {sugerencias.length > 0 && (
                                             <div className="absolute top-full left-0 right-0 mt-2 bg-white border border-slate-200 rounded-xl shadow-2xl overflow-hidden z-30">
                                                 {sugerencias.map(s => (
                                                     <div key={s.id} onClick={() => seleccionarExpediente(s)} className="p-3 border-b border-slate-50 hover:bg-blue-50 cursor-pointer flex justify-between items-center transition-colors">
-                                                        <div><p className="font-bold text-sm text-slate-800">{s.cliente}</p><p className="text-[10px] text-slate-500">EXP: <span className="text-blue-600 font-bold">{s.id} ({formatearConCeros(s.id)})</span> | Titular: {s.asesorTitular}</p></div>
+                                                        <div><p className="font-bold text-sm text-slate-800">{s.cliente}</p><p className="text-[10px] text-slate-500">EXP: <span className="text-blue-600 font-bold">{normalizarIdNatural(s.id)} ({formatearConCeros(s.id)})</span> | Titular: {s.asesorTitular}</p></div>
                                                         <i className="fa-solid fa-chevron-right text-slate-300"></i>
                                                     </div>
                                                 ))}
@@ -2043,7 +2270,7 @@
                                     <div className="glass-card p-6 rounded-2xl border-l-4 border-[#59B447] animate-fade-in z-10">
                                         <div className="mb-4 pb-4 border-b border-slate-100 flex justify-between items-start">
                                             <div>
-                                                <p className="text-xs text-slate-400 font-bold uppercase">Expediente N°: <span className="text-slate-800 text-base">{expEncontrado.id} ({formatearConCeros(expEncontrado.id)})</span></p>
+                                                <p className="text-xs text-slate-400 font-bold uppercase">Expediente N°: <span className="text-slate-800 text-base">{normalizarIdNatural(expEncontrado.id)} ({formatearConCeros(expEncontrado.id)})</span></p>
                                                 <p className="text-xl font-bold text-slate-800 uppercase mt-1">{expEncontrado.cliente}</p>
                                                 <div className="flex gap-2 mt-2 items-center flex-wrap">
                                                     <BadgeEstado estado={expEncontrado.estadoCredito} />
@@ -2085,15 +2312,6 @@
                         {/* ===================================================================== */}
                         {view === 'dashboard' && (
                             <div className="animate-fade-in space-y-6 no-print">
-                                {esAdmin && (
-                                    <div className="bg-amber-50 border-l-4 border-amber-500 p-4 rounded-xl flex items-center justify-between">
-                                        <div>
-                                            <p className="text-xs font-black text-amber-900 uppercase"><i className="fa-solid fa-eye mr-1"></i> Modo Consulta Administrativa — Sede {sedeActual}</p>
-                                            <p className="text-[11px] text-amber-800">Puedes buscar expedientes por número o nombre y filtrarlos por asesor o estado crediticio. La edición y exportación están reservadas para Gerencia.</p>
-                                        </div>
-                                    </div>
-                                )}
-
                                 <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-3">
                                     <div className="flex flex-col lg:flex-row gap-3 items-center">
                                         <div className="relative flex-1 w-full">
@@ -2102,7 +2320,7 @@
                                                 type="text"
                                                 value={dashSearchQuery}
                                                 onChange={e => setDashSearchQuery(e.target.value)}
-                                                placeholder={`Buscar en ${sedeActual} por N° de Expediente (ej. 7 o 001-00007) o Nombre del Cliente...`}
+                                                placeholder={`Buscar en ${sedeActual} por N° de Expediente (ej. 8 o 001-00008) o Nombre del Cliente...`}
                                                 className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#59B447]"
                                             />
                                         </div>
@@ -2124,6 +2342,7 @@
                                             <i className="fa-solid fa-user-tie text-slate-400 text-xs"></i>
                                             <select value={dashFilterAsesor} onChange={e=>setDashFilterAsesor(e.target.value)} className="text-xs font-bold text-slate-700 outline-none bg-transparent w-full">
                                                 <option value="TODOS">ASESOR: TODOS</option>
+                                                <option value="POR DEFINIR">POR DEFINIR</option>
                                                 {asesores.map(a => <option key={a} value={a}>{a}</option>)}
                                             </select>
                                         </div>
@@ -2146,7 +2365,7 @@
                                             <i className="fa-solid fa-qrcode text-slate-400 text-xs"></i>
                                             <select value={dashFiltroInv} onChange={e=>setDashFiltroInv(e.target.value)} className="text-xs font-bold text-slate-700 outline-none bg-transparent w-full">
                                                 <option value="TODOS">INVENTARIO: TODOS</option>
-                                                <option value="CONTABILIZADO">INVENTARIO REGISTRADO HOY</option>
+                                                <option value="CONTABILIZADO">INVENTARIO REGISTRADO</option>
                                                 <option value="FALTANTE">PENDIENTES DE ESCANEAR</option>
                                             </select>
                                         </div>
@@ -2167,8 +2386,8 @@
                                         <p className="text-3xl font-bold text-red-600">{listaDash.filter(e => !e.ubicacionFisica.includes('CAJA')).length}</p>
                                     </div>
                                     <div className="bg-emerald-50 p-5 rounded-2xl shadow-sm border-l-4 border-emerald-600">
-                                        <p className="text-xs text-emerald-700 font-bold uppercase">Inventario QR Hoy</p>
-                                        <p className="text-3xl font-bold text-emerald-700">{listaDash.filter(e => e.invSesion === hoySesionId && e.invFecha).length}</p>
+                                        <p className="text-xs text-emerald-700 font-bold uppercase">Inventario QR Registrado</p>
+                                        <p className="text-3xl font-bold text-emerald-700">{listaDash.filter(e => estaContabilizadoEnSesion(e)).length}</p>
                                     </div>
                                 </div>
 
@@ -2186,7 +2405,7 @@
                                                     <th className="p-3">Estado / Categoría</th>
                                                     <th className="p-3">Asesor Titular</th>
                                                     <th className="p-3">Ubicación Física</th>
-                                                    <th className="p-3">Inventario QR Hoy</th>
+                                                    <th className="p-3">Inventario QR</th>
                                                 </tr>
                                             </thead>
                                             <tbody>
@@ -2206,7 +2425,7 @@
                                                             <p className="text-[9px] text-slate-400 font-normal">{e.fechaUltimoMov}</p>
                                                         </td>
                                                         <td className="p-3">
-                                                            {(e.invSesion === hoySesionId && e.invFecha) ? (
+                                                            {estaContabilizadoEnSesion(e) ? (
                                                                 <span className="bg-green-100 text-green-800 text-[10px] font-black px-2.5 py-1 rounded-full">
                                                                     ✔ REGISTRADO ({e.invCajero})
                                                                 </span>
@@ -2227,9 +2446,9 @@
                         )}
 
                         {/* ===================================================================== */}
-                        {/* 4. REGISTRO DE EXPEDIENTES Y CARGA CSV CON BOTONES TUTORIALES (i)     */}
+                        {/* 4. BASE DE DATOS, EDICIÓN Y CARGA CSV (CAJA, ADMIN Y GERENTES)        */}
                         {/* ===================================================================== */}
-                        {view === 'inventario' && puedeOperarCaja && (
+                        {view === 'inventario' && puedeGestionarBase && (
                             <div className="grid grid-cols-1 xl:grid-cols-4 gap-6 animate-fade-in no-print">
                                 <div className="xl:col-span-1 space-y-6">
                                     <div className="glass-card p-5 rounded-2xl h-fit border-t-4 border-[#59B447]">
@@ -2239,7 +2458,7 @@
                                                 title="Cómo registrar un expediente individual"
                                                 steps={[
                                                     "N° Expediente: Escribe únicamente el número natural (ej. 7 o 125). El sistema lo vincula automáticamente con su formato QR 001-00007.",
-                                                    "Nombre del Cliente: Escribe Apellidos y Nombres completos (sin necesidad de DNI, el sistema rellena el DNI como 'NO IDENTIFICADO').",
+                                                    "Nombre del Cliente: Escribe Apellidos y Nombres completos (el sistema rellena el DNI como 'NO IDENTIFICADO').",
                                                     "Deja marcada la casilla 'Añadir Ticket QR' para que se agregue directo a tu hoja de impresión A4."
                                                 ]}
                                                 onOpen={setHelpModal}
@@ -2264,6 +2483,7 @@
                                                 <label className="text-[10px] font-bold text-slate-500 uppercase">Asesor Titular</label>
                                                 <select value={formInv.asesorTitular} onChange={e=>setFormInv({...formInv, asesorTitular: e.target.value})} className="w-full p-2 border rounded bg-white text-sm">
                                                     <option value="">Selecciona...</option>
+                                                    <option value="POR DEFINIR">POR DEFINIR</option>
                                                     {asesores.map(a => <option key={a} value={a}>{a}</option>)}
                                                 </select>
                                             </div>
@@ -2279,30 +2499,33 @@
                                         </form>
                                     </div>
 
-                                    {esGerente && (
-                                        <div className="bg-orange-50 border border-orange-200 p-5 rounded-2xl shadow-sm">
-                                            <div className="flex items-center justify-between mb-2">
-                                                <h3 className="font-bold text-orange-800 text-sm"><i className="fa-solid fa-cloud-arrow-up mr-1"></i> Carga Masiva CSV</h3>
-                                                <HelpButton
-                                                    title="Formato para subir archivo Excel (CSV)"
-                                                    steps={[
-                                                        "En Excel, ordena tus columnas así: Columna A: N° Expediente (ej. 1, 2, 3), Columna B: DNI (puedes dejarlo vacío, el sistema pondrá NO IDENTIFICADO), Columna C: Nombre del Cliente, Columna D: Estado (ACTIVO), Columna E: Asesor Titular.",
-                                                        "También acepta archivos de 4 columnas sin columna DNI (ID, Cliente, Estado, Asesor).",
-                                                        "Guarda el Excel como 'CSV (delimitado por comas)' y súbelo con el botón naranja."
-                                                    ]}
-                                                    onOpen={setHelpModal}
-                                                />
-                                            </div>
-                                            <p className="text-[10px] text-orange-700 mb-3">Rellena automáticamente el DNI como «NO IDENTIFICADO» y acepta números naturales.</p>
-                                            <button onClick={() => csvInputRef.current.click()} className="w-full bg-orange-500 text-white py-2 rounded-lg font-bold shadow hover:bg-orange-600 text-xs">Seleccionar Archivo CSV</button>
+                                    {/* CARGA MASIVA CSV HABILITADA PARA CAJEROS, ADMINISTRADORES Y GERENTES */}
+                                    <div className="bg-orange-50 border border-orange-200 p-5 rounded-2xl shadow-sm">
+                                        <div className="flex items-center justify-between mb-2">
+                                            <h3 className="font-bold text-orange-800 text-sm"><i className="fa-solid fa-cloud-arrow-up mr-1"></i> Carga Masiva CSV</h3>
+                                            <HelpButton
+                                                title="Formato para subir archivo Excel (CSV)"
+                                                steps={[
+                                                    "En Excel, ordena tus columnas así: Columna A: N° Expediente (ej. 1, 2, 3), Columna B: DNI (puedes dejarlo vacío, el sistema pondrá NO IDENTIFICADO), Columna C: Nombre del Cliente, Columna D: Estado (ACTIVO), Columna E: Asesor Titular.",
+                                                    "También acepta archivos de 4 columnas sin columna DNI (ID, Cliente, Estado, Asesor).",
+                                                    "Guarda el Excel como 'CSV (delimitado por comas)' y súbelo con el botón naranja."
+                                                ]}
+                                                onOpen={setHelpModal}
+                                            />
                                         </div>
-                                    )}
+                                        <p className="text-[10px] text-orange-700 mb-3">Habilitado para Caja, Administración y Gerencia. Rellena el DNI como «NO IDENTIFICADO».</p>
+                                        <button onClick={() => csvInputRef.current.click()} className="w-full bg-orange-500 text-white py-2.5 rounded-lg font-bold shadow hover:bg-orange-600 text-xs">
+                                            <i className="fa-solid fa-file-arrow-up mr-1"></i> Seleccionar Archivo CSV
+                                        </button>
+                                    </div>
                                 </div>
 
                                 <div className="xl:col-span-3 glass-card p-6 rounded-2xl h-[800px] flex flex-col">
                                     <div className="flex justify-between items-center mb-4 border-b pb-2">
                                         <h3 className="font-bold text-slate-800">Base de Expedientes — {sedeActual} ({expedientes.length})</h3>
-                                        {!esGerente && <span className="text-[10px] bg-slate-100 text-slate-500 px-2.5 py-1 rounded font-bold">La edición de expedientes creados requiere perfil Gerencial</span>}
+                                        <span className="text-[10px] bg-green-50 text-green-700 border border-green-200 px-2.5 py-1 rounded font-bold">
+                                            <i className="fa-solid fa-pen-to-square mr-1"></i> Edición Habilitada ({rolSistema})
+                                        </span>
                                     </div>
                                     <div className="overflow-x-auto overflow-y-auto flex-1 border border-slate-200 rounded-xl">
                                         <table className="w-full text-sm text-left">
@@ -2331,6 +2554,7 @@
                                                                         {estadosDisponibles.map(est => <option key={est} value={est}>{est}</option>)}
                                                                     </select>
                                                                     <select value={editMode.nuevoAsesor} onChange={evt => setEditMode({...editMode, nuevoAsesor: evt.target.value})} className="text-[10px] border p-1 rounded w-full">
+                                                                        <option value="POR DEFINIR">POR DEFINIR</option>
                                                                         {asesores.map(a => <option key={a} value={a}>{a}</option>)}
                                                                     </select>
                                                                     <input type="text" value={editMode.nuevaCatExtra} onChange={evt => setEditMode({...editMode, nuevaCatExtra: evt.target.value})} placeholder="Subcategoría..." className="text-[10px] border p-1 rounded w-full uppercase" />
@@ -2359,23 +2583,21 @@
                                                         <td className="p-3">
                                                             {isEditing ? (
                                                                 <div className="flex gap-1 flex-col sm:flex-row">
-                                                                    <button onClick={() => guardarEdicionGerencial(e)} className="bg-[#59B447] text-white px-2.5 py-1 rounded text-[10px] font-bold">Guardar</button>
+                                                                    <button onClick={() => guardarEdicionExpediente(e)} className="bg-[#59B447] text-white px-2.5 py-1 rounded text-[10px] font-bold">Guardar</button>
                                                                     <button onClick={() => setEditMode(null)} className="bg-slate-300 text-slate-700 px-2.5 py-1 rounded text-[10px] font-bold">Cancelar</button>
                                                                 </div>
                                                             ) : (
                                                                 <div className="flex gap-1 flex-col">
-                                                                    {puedeEditarBase && (
-                                                                        <button onClick={() => setEditMode({
-                                                                            id: e.id,
-                                                                            nuevoCliente: e.cliente,
-                                                                            nuevoEstado: e.estadoCredito,
-                                                                            nuevoAsesor: e.asesorTitular,
-                                                                            nuevaUbicacion: e.ubicacionFisica,
-                                                                            nuevaCatExtra: e.categoriaExtra || ''
-                                                                        })} className="bg-slate-100 text-slate-700 border border-slate-300 px-2 py-1 rounded text-[10px] font-bold hover:bg-slate-200">
-                                                                            <i className="fa-solid fa-pen"></i> Editar
-                                                                        </button>
-                                                                    )}
+                                                                    <button onClick={() => setEditMode({
+                                                                        id: e.id,
+                                                                        nuevoCliente: e.cliente,
+                                                                        nuevoEstado: e.estadoCredito,
+                                                                        nuevoAsesor: String(e.asesorTitular || 'POR DEFINIR').toUpperCase(),
+                                                                        nuevaUbicacion: e.ubicacionFisica,
+                                                                        nuevaCatExtra: e.categoriaExtra || ''
+                                                                    })} className="bg-slate-100 text-slate-700 border border-slate-300 px-2 py-1 rounded text-[10px] font-bold hover:bg-slate-200">
+                                                                        <i className="fa-solid fa-pen"></i> Editar
+                                                                    </button>
                                                                     <button onClick={() => setHistorialVisible(e)} className="bg-blue-50 text-blue-700 border border-blue-200 px-2 py-1 rounded text-[10px] font-bold hover:bg-blue-100">
                                                                         <i className="fa-solid fa-clock-rotate-left"></i> Historial
                                                                     </button>
@@ -2448,7 +2670,6 @@
                                     </div>
                                 </div>
 
-                                {/* PANEL PERSONALIZADOR DE IMPRESIÓN */}
                                 <div className="no-print bg-white p-5 rounded-2xl shadow-sm border-2 border-[#59B447]/40 mb-4">
                                     <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 border-b pb-2 gap-2">
                                         <h3 className="font-black text-slate-800 text-sm uppercase">
@@ -2459,7 +2680,7 @@
                                             onClick={() => setPrintConfig({ qrSize: 70, qrPosition: 'IZQUIERDA', qrDataMode: 'COMPACTO', formatoCodigoRojo: 'CEROS', fontSizeCliente: 0, fontSizeCodigo: 24, ticketHeightMm: 40, showHeaderSede: true })}
                                             className="text-[11px] bg-slate-100 text-slate-600 px-3 py-1 rounded-lg font-bold hover:bg-slate-200"
                                         >
-                                            <i className="fa-solid fa-rotate-left mr-1"></i> Restaurar Diseño Ideal (Imagen 1)
+                                            <i className="fa-solid fa-rotate-left mr-1"></i> Restaurar Diseño Ideal
                                         </button>
                                     </div>
 
@@ -2467,7 +2688,7 @@
                                         <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
                                             <label className="block text-[10px] font-black text-slate-500 uppercase mb-1.5">1. Ubicación del Código QR</label>
                                             <select value={printConfig.qrPosition} onChange={e => setPrintConfig({...printConfig, qrPosition: e.target.value})} className="w-full p-2 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-800">
-                                                <option value="IZQUIERDA">QR a la Izquierda + Nombre a la Derecha (Imagen 1)</option>
+                                                <option value="IZQUIERDA">QR a la Izquierda + Nombre a la Derecha</option>
                                                 <option value="DERECHA">QR a la Derecha + Nombre a la Izquierda</option>
                                                 <option value="ARRIBA">QR Centrado Arriba + Nombre Debajo</option>
                                                 <option value="GIGANTE">QR Gigante Central</option>
@@ -2480,17 +2701,12 @@
                                                 <span className="text-[#59B447] font-black">{printConfig.qrSize} px</span>
                                             </div>
                                             <input type="range" min="52" max="90" value={printConfig.qrSize} onChange={e => setPrintConfig({...printConfig, qrSize: parseInt(e.target.value, 10)})} className="w-full accent-[#59B447] cursor-pointer" />
-                                            <div className="flex justify-between text-[9px] text-slate-400 font-bold mt-1">
-                                                <span>Compacto (52px)</span>
-                                                <span>Ideal A4 (70px)</span>
-                                                <span>Grande (90px)</span>
-                                            </div>
                                         </div>
 
                                         <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
                                             <label className="block text-[10px] font-black text-slate-500 uppercase mb-1.5">3. Formato del Código Rojo Impreso</label>
                                             <select value={printConfig.formatoCodigoRojo} onChange={e => setPrintConfig({...printConfig, formatoCodigoRojo: e.target.value})} className="w-full p-2 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-800">
-                                                <option value="CEROS">Formato 001-00007 (Como en tu Imagen 1)</option>
+                                                <option value="CEROS">Formato 001-00007</option>
                                                 <option value="NATURAL">Número Natural (Ej. 7)</option>
                                             </select>
                                         </div>
@@ -2525,11 +2741,10 @@
                                     </div>
                                 </div>
 
-                                {/* BARRA DE ACCIÓN: DESCARGAR PDF A4 EXACTO O IMPRIMIR */}
                                 <div className="no-print mb-4 flex flex-col md:flex-row justify-between items-start md:items-center bg-white p-4 rounded-xl shadow-sm border border-slate-200 gap-4">
                                     <div>
                                         <h2 className="text-lg font-black text-slate-800"><i className="fa-solid fa-print text-[#59B447] mr-1"></i> Vista Previa Real en Tamaño A4 (210mm)</h2>
-                                        <p className="text-xs text-slate-500">Etiquetas en cola: <span className="font-bold text-blue-600">{ticketsQueue.length}</span> ({printPages.length} hojas A4). Usa el botón verde de PDF para una impresión 100% libre de descuadres.</p>
+                                        <p className="text-xs text-slate-500">Etiquetas en cola: <span className="font-bold text-blue-600">{ticketsQueue.length}</span> ({printPages.length} hojas A4).</p>
                                     </div>
                                     <div className="flex flex-wrap gap-2 w-full md:w-auto">
                                         <button onClick={() => { if(confirm("¿Vaciar todas las etiquetas en cola?")) setTicketsQueue([]); }} className="bg-red-50 text-red-600 px-4 py-2.5 rounded-xl font-bold hover:bg-red-100 text-xs">
@@ -2544,7 +2759,6 @@
                                     </div>
                                 </div>
 
-                                {/* LIENZO A4 REAL (210MM EN PANTALLA Y EN IMPRESORA) */}
                                 <div className="print-container w-full overflow-x-auto flex flex-col items-center pb-8">
                                     {printPages.map((page, pageIdx) => (
                                         <div key={pageIdx} className="print-area bg-white mx-auto mb-8 shadow-lg" style={{ pageBreakAfter: pageIdx === printPages.length - 1 ? 'auto' : 'always' }}>
