@@ -1,0 +1,1981 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Control de Expedientes & QR - CREDIBAN V20 Cloud</title>
+    
+    <!-- Librerías Core -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Librerías para PDF Nativo (Exclusivo Gerencia) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
+
+    <!-- Librerías para Escáner QR en Ráfaga y Generador Masivo QR -->
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js"></script>
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;900&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #f1f5f9; }
+        .glass-card { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.4); box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); }
+        .tab-active { border-bottom: 3px solid #59B447; color: #59B447; font-weight: bold; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        .animate-fade-in { animation: fadeIn 0.3s ease-out forwards; }
+        .modal-bg { animation: fadeIn 0.2s ease-out forwards; }
+        
+        .login-bg { background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); position: relative; overflow: hidden; }
+        .login-bg::before { content: ''; position: absolute; top: -50%; left: -50%; width: 200%; height: 200%; background: radial-gradient(circle, rgba(89,180,71,0.05) 0%, rgba(0,0,0,0) 70%); }
+
+        /* IMPRESIÓN EXACTA 4x6 (24 Tickets QR por Hoja A4) */
+        @media print {
+            html, body, #root, main { 
+                height: auto !important; min-height: 0 !important; overflow: visible !important; 
+                display: block !important; background: white !important; margin: 0 !important; padding: 0 !important;
+            }
+            .no-print { display: none !important; }
+            .print-container { padding-left: 2px !important; padding-top: 2px !important; }
+            .print-area { 
+                margin: 0 auto !important; width: 210mm !important; border-left: 2px solid black !important;
+                border-top: 2px solid black !important; box-shadow: none !important; page-break-after: always; box-sizing: border-box !important;
+            }
+            .text-red-600 { color: #dc2626 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+            .ticket-cell { page-break-inside: avoid; }
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        // =========================================================================
+        // 1. URL DEL SCRIPT DE BASE DE DATOS DE EXPEDIENTES (V20)
+        // =========================================================================
+        const API_URL = "https://script.google.com/macros/s/AKfycbwHEPrFeiFPsB0z1SsTeO2KKfXoSVcZsjxLbQ_UjREyTEI28edgnZDLGnTB0Z7PqTRs/exec";
+
+        // =========================================================================
+        // 2. URL OFICIAL DEL SCRIPT MAESTRO DE USUARIOS (SINCRONIZADO)
+        // =========================================================================
+        const USERS_API_URL = "https://script.google.com/macros/s/AKfycbyPGo-OSC0KZcz03bAMpKQ82cipc2T1LNztaI229FhYqqNNXqG1oSb6hPPgVSSU3piqiw/exec";
+
+        // Sintetizador Nativo de Sonidos en 0 ms (Estilo Caja Plaza Vea)
+        const playSound = (type) => {
+            try {
+                const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                const playTone = (freq, start, duration, wave = 'sine') => {
+                    const osc = ctx.createOscillator();
+                    const gain = ctx.createGain();
+                    osc.type = wave;
+                    osc.frequency.setValueAtTime(freq, ctx.currentTime + start);
+                    gain.gain.setValueAtTime(0.25, ctx.currentTime + start);
+                    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + start + duration);
+                    osc.connect(gain);
+                    gain.connect(ctx.destination);
+                    osc.start(ctx.currentTime + start);
+                    osc.stop(ctx.currentTime + start + duration);
+                };
+
+                if (type === 'beep') {
+                    playTone(1850, 0, 0.09, 'square');
+                } else if (type === 'duplicate') {
+                    playTone(420, 0, 0.12, 'sawtooth');
+                    playTone(350, 0.15, 0.18, 'sawtooth');
+                } else if (type === 'alert') {
+                    playTone(220, 0, 0.25, 'sawtooth');
+                    playTone(180, 0.28, 0.35, 'sawtooth');
+                }
+            } catch (e) {}
+        };
+
+        // Clasificador Estricto de Roles (Solo deja pasar CAJERO, ADMINISTRADOR y GERENTE)
+        const clasificarRolSistema = (cargoRaw) => {
+            const c = String(cargoRaw || "")
+                .normalize("NFD")
+                .replace(/[\u0300-\u036f]/g, "")
+                .toUpperCase()
+                .trim();
+
+            // 1. Bloqueo explícito de Asesores / Trabajadores / Analistas
+            if (c.includes("ASESOR") || c.includes("ANALISTA") || c.includes("PROMOTOR") || c === "TRABAJADOR") {
+                return "BLOQUEADO_ASESOR";
+            }
+            // 2. Gerente (Control Total + Exportación + Multi-Sede + Parámetros)
+            if (c.includes("GERENTE") || c.includes("GERENCIA") || c.includes("DIRECTOR") || c.includes("SUPERADMIN")) {
+                return "GERENTE";
+            }
+            // 3. Administrador (Solo Búsqueda y Filtros de su Sede, Sin Exportar ni Editar)
+            if (c.includes("ADMIN") || c.includes("SUPERVISOR") || c.includes("JEFE") || c.includes("COORDINADOR")) {
+                return "ADMINISTRADOR";
+            }
+            // 4. Cajero (Operaciones de Archivo, Escáner QR, Préstamos, Registro y Tickets)
+            if (c.includes("CAJERO") || c.includes("CAJERA") || c.includes("CAJA") || c.includes("ARCHIVO")) {
+                return "CAJERO";
+            }
+            return "NO_AUTORIZADO";
+        };
+
+        // Componente QR para las etiquetas A4
+        function QRCodeCanvas({ value, size = 54 }) {
+            const canvasRef = React.useRef(null);
+            React.useEffect(() => {
+                if (canvasRef.current && window.QRious) {
+                    new window.QRious({
+                        element: canvasRef.current,
+                        value: value,
+                        size: size,
+                        level: 'M',
+                        padding: 0
+                    });
+                }
+            }, [value, size]);
+            return <canvas ref={canvasRef} style={{ width: `${size}px`, height: `${size}px` }} />;
+        }
+
+        function App() {
+            // =====================================================================
+            // ESTADOS DE SEGURIDAD, USUARIO Y PARÁMETROS SINCRONIZADOS
+            // =====================================================================
+            const [isAuth, setIsAuth] = React.useState(false);
+            const [isLoading, setIsLoading] = React.useState(false);
+            const [loadingMsg, setLoadingMsg] = React.useState('');
+            const [loginErrorMsg, setLoginErrorMsg] = React.useState('');
+
+            const [sedesDisponibles, setSedesDisponibles] = React.useState(["HUACHO", "HUARAZ", "ICA", "HUANUCO"]);
+            const [estadosDisponibles, setEstadosDisponibles] = React.useState(["ACTIVO", "MORA DURA", "CANCELADO", "LISTA NEGRA", "JUDICIAL", "REPROGRAMADO"]);
+            const [ubicacionesDisponibles, setUbicacionesDisponibles] = React.useState(["CAJA (ARCHIVO)", "EN COMITÉ", "AUDITORÍA", "ARCHIVO CENTRAL"]);
+
+            const [sedeActual, setSedeActual] = React.useState(() => localStorage.getItem('crediban_v20_sede') || 'HUACHO');
+            const [usuarioInput, setUsuarioInput] = React.useState(() => localStorage.getItem('crediban_v20_user') || '');
+            const [passwordInput, setPasswordInput] = React.useState('');
+
+            // Datos del usuario autenticado
+            const [operadorNombre, setOperadorNombre] = React.useState('');
+            const [rolSistema, setRolSistema] = React.useState(''); // 'CAJERO' | 'ADMINISTRADOR' | 'GERENTE'
+            const [cargoOriginal, setCargoOriginal] = React.useState('');
+            const [sedesPermitidas, setSedesPermitidas] = React.useState([]);
+
+            // Permisos derivados del rol
+            const esGerente = rolSistema === 'GERENTE';
+            const esAdmin = rolSistema === 'ADMINISTRADOR';
+            const esCajero = rolSistema === 'CAJERO';
+            const puedeOperarCaja = esCajero || esGerente; // Cajeros y Gerentes pueden usar escáner, prestar, registrar y tickets
+            const puedeExportar = esGerente;               // Solo Gerentes pueden exportar CSV y PDF
+            const puedeEditarBase = esGerente;             // Solo Gerentes pueden editar expedientes y parámetros
+
+            // ESTADOS DE NAVEGACIÓN Y DATOS
+            const [view, setView] = React.useState('dashboard');
+            const [asesores, setAsesores] = React.useState([]);
+            const [expedientes, setExpedientes] = React.useState([]);
+            const [ticketsQueue, setTicketsQueue] = React.useState(() => JSON.parse(localStorage.getItem('crediban_tickets_queue')) || []);
+
+            // ESTADOS DEL ESCÁNER QR RÁFAGA Y MULTICAJERO EN VIVO
+            const [scanMode, setScanMode] = React.useState('INVENTARIO'); // 'INVENTARIO' | 'RETORNO' | 'PRESTAMO'
+            const [asesorLote, setAsesorLote] = React.useState('');
+            const [cameraActive, setCameraActive] = React.useState(false);
+            const [scanFeedback, setScanFeedback] = React.useState(null);
+            const [scanLog, setScanLog] = React.useState([]);
+            const [liveSyncActive, setLiveSyncActive] = React.useState(true);
+            const [lastSyncTime, setLastSyncTime] = React.useState('');
+            const [lectorFisicoInput, setLectorFisicoInput] = React.useState('');
+
+            const lastScannedRef = React.useRef({ code: '', time: 0 });
+            const expedientesRef = React.useRef(expedientes);
+            React.useEffect(() => { expedientesRef.current = expedientes; }, [expedientes]);
+
+            React.useEffect(() => { localStorage.setItem('crediban_tickets_queue', JSON.stringify(ticketsQueue)); }, [ticketsQueue]);
+
+            // Al cargar la pantalla de Login, consultar dinámicamente las sedes y parámetros del servidor
+            React.useEffect(() => {
+                const cargarCatalogoInicial = async () => {
+                    try {
+                        const res = await fetch(API_URL, {
+                            method: 'POST',
+                            body: JSON.stringify({ action: 'getParametros' })
+                        });
+                        const data = await res.json();
+                        if (data.status === 'success' && data.parametros) {
+                            aplicarCatalogoParametros(data.parametros);
+                        }
+                    } catch (e) {}
+                };
+                cargarCatalogoInicial();
+            }, []);
+
+            const aplicarCatalogoParametros = (param) => {
+                if (!param) return;
+                if (Array.isArray(param.sedes) && param.sedes.length > 0) setSedesDisponibles(param.sedes);
+                if (Array.isArray(param.estadosCredito) && param.estadosCredito.length > 0) setEstadosDisponibles(param.estadosCredito);
+                if (Array.isArray(param.ubicaciones) && param.ubicaciones.length > 0) setUbicacionesDisponibles(param.ubicaciones);
+            };
+
+            const getFechaHora = () => {
+                const now = new Date();
+                const d = String(now.getDate()).padStart(2, '0');
+                const m = String(now.getMonth() + 1).padStart(2, '0');
+                const y = now.getFullYear();
+                const h = String(now.getHours()).padStart(2, '0');
+                const min = String(now.getMinutes()).padStart(2, '0');
+                return `${d}/${m}/${y}, ${h}:${min}`;
+            };
+
+            const getHoyId = () => {
+                const now = new Date();
+                return `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+            };
+
+            const formatIdExpediente = (rawNum) => {
+                const soloNum = String(rawNum).replace(/\D/g, '');
+                return soloNum ? "001-" + soloNum.padStart(5, '0') : '';
+            };
+
+            // =====================================================================
+            // LOGIN CON VALIDACIÓN ESTRICTA DE ROLES (BLOQUEA ASESORES)
+            // =====================================================================
+            const handleLogin = async (e) => {
+                e.preventDefault();
+                setLoginErrorMsg('');
+                if (!sedeActual) return setLoginErrorMsg("Selecciona una sede para ingresar.");
+                if (!usuarioInput.trim()) return setLoginErrorMsg("Ingresa tu nombre de usuario.");
+
+                setIsLoading(true);
+                setLoadingMsg('Verificando credenciales y permisos en el Script de Usuarios...');
+
+                try {
+                    const res = await fetch(API_URL, {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            action: 'login',
+                            usuario: usuarioInput.trim(),
+                            password: passwordInput,
+                            sede: sedeActual
+                        })
+                    });
+                    const data = await res.json();
+
+                    if (data.status !== 'success') {
+                        setIsLoading(false);
+                        setLoginErrorMsg(data.message || 'Usuario o contraseña incorrectos.');
+                        setPasswordInput('');
+                        return;
+                    }
+
+                    const userObj = data.user || {};
+                    const cargoDetectado = String(userObj.cargo || 'NO_AUTORIZADO').toUpperCase();
+                    const rolClasificado = clasificarRolSistema(cargoDetectado);
+
+                    // BLOQUEO ESTRICTO A ASESORES Y ROLES NO AUTORIZADOS
+                    if (rolClasificado === 'BLOQUEADO_ASESOR') {
+                        playSound('alert');
+                        setIsLoading(false);
+                        setLoginErrorMsg('⛔ ACCESO RESTRINGIDO: Los Asesores de Crédito no tienen permiso para ingresar al sistema de Control Físico de Expedientes. Acceso exclusivo para Cajeros, Administradores y Gerentes.');
+                        setPasswordInput('');
+                        return;
+                    }
+
+                    if (rolClasificado === 'NO_AUTORIZADO') {
+                        playSound('alert');
+                        setIsLoading(false);
+                        setLoginErrorMsg(`⛔ Rol sin acceso (${cargoDetectado}): Solo pueden ingresar Cajeros, Administradores y Gerentes.`);
+                        setPasswordInput('');
+                        return;
+                    }
+
+                    // Configurar sesión según el rol autorizado
+                    const sedeEfectiva = data.sede || userObj.sedeActiva || sedeActual;
+                    setSedeActual(sedeEfectiva);
+                    setOperadorNombre(userObj.nombreCorto || userObj.nombre || usuarioInput.toUpperCase());
+                    setCargoOriginal(cargoDetectado);
+                    setRolSistema(rolClasificado);
+                    setSedesPermitidas(Array.isArray(userObj.sedesPermitidas) ? userObj.sedesPermitidas : [sedeEfectiva]);
+
+                    if (data.parametros) aplicarCatalogoParametros(data.parametros);
+                    if (Array.isArray(data.asesores)) setAsesores(data.asesores);
+                    if (Array.isArray(data.data)) setExpedientes(data.data);
+
+                    localStorage.setItem('crediban_v20_sede', sedeEfectiva);
+                    localStorage.setItem('crediban_v20_user', usuarioInput.trim());
+                    setLastSyncTime(new Date().toLocaleTimeString());
+
+                    // Definir vista inicial según el rol:
+                    // - Administrador va directo al Buscador/Filtro de su Sede
+                    // - Cajero y Gerente van directo al Escáner QR Ráfaga
+                    if (rolClasificado === 'ADMINISTRADOR') {
+                        setView('dashboard');
+                    } else {
+                        setView('escaner');
+                    }
+
+                    setIsAuth(true);
+                } catch (err) {
+                    setLoginErrorMsg('❌ Error de conexión con el servidor. Verifica tu internet y que el Script V20 esté implementado.');
+                }
+                setIsLoading(false);
+            };
+
+            // CAMBIO DE SEDE EN VIVO (PARA GERENTES)
+            const cambiarSedeActiva = async (nuevaSede) => {
+                if (!nuevaSede || nuevaSede === sedeActual) return;
+                setIsLoading(true);
+                setLoadingMsg(`Cargando base de datos de filial ${nuevaSede}...`);
+                try {
+                    const res = await fetch(API_URL, {
+                        method: 'POST',
+                        body: JSON.stringify({ action: 'getData', sede: nuevaSede, password: passwordInput, usuario: operadorNombre })
+                    });
+                    const data = await res.json();
+                    if (data.status === 'success') {
+                        setSedeActual(nuevaSede);
+                        setExpedientes(data.data || []);
+                        if (Array.isArray(data.asesores)) setAsesores(data.asesores);
+                        if (data.parametros) aplicarCatalogoParametros(data.parametros);
+                        setScanFeedback(null);
+                    }
+                } catch (e) {
+                    alert('Error al cambiar de sede.');
+                }
+                setIsLoading(false);
+            };
+
+            // =====================================================================
+            // SINCRONIZACIÓN EN VIVO CADA 3 SEGUNDOS (MULTICAJERO)
+            // =====================================================================
+            React.useEffect(() => {
+                if (!isAuth || !liveSyncActive || (view !== 'escaner' && view !== 'dashboard')) return;
+                const timer = setInterval(async () => {
+                    try {
+                        const res = await fetch(API_URL, {
+                            method: 'POST',
+                            body: JSON.stringify({ action: 'pollLive', sede: sedeActual, password: passwordInput })
+                        });
+                        const data = await res.json();
+                        if (data.status === 'success' && Array.isArray(data.data)) {
+                            setExpedientes(data.data);
+                            if (Array.isArray(data.asesores)) setAsesores(data.asesores);
+                            if (data.parametros) aplicarCatalogoParametros(data.parametros);
+                            setLastSyncTime(new Date().toLocaleTimeString());
+                        }
+                    } catch (e) {}
+                }, 3000);
+                return () => clearInterval(timer);
+            }, [isAuth, liveSyncActive, view, sedeActual, passwordInput]);
+
+            // GUARDADO EN LA NUBE (SILENCIOSO PARA EL ESCÁNER RÁFAGA)
+            const syncExpedienteCloud = async (expToSave, silent = false, checkDuplicateInv = false) => {
+                if (!silent) {
+                    setIsLoading(true);
+                    setLoadingMsg('Guardando cambios en Google Sheets...');
+                }
+                try {
+                    const res = await fetch(API_URL, {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            action: 'save',
+                            sede: sedeActual,
+                            usuario: operadorNombre,
+                            password: passwordInput,
+                            data: expToSave,
+                            checkDuplicateInv
+                        })
+                    });
+                    const data = await res.json();
+                    if (!silent) setIsLoading(false);
+                    return data;
+                } catch (err) {
+                    if (!silent) {
+                        setIsLoading(false);
+                        alert('❌ Error de conexión al sincronizar.');
+                    }
+                    return { status: 'error' };
+                }
+            };
+
+            // =====================================================================
+            // PROCESADOR CENTRAL DEL ESCÁNER QR RÁFAGA (CAJEROS Y GERENTES)
+            // =====================================================================
+            const procesarLecturaQR = async (rawText) => {
+                if (!rawText || !puedeOperarCaja) return;
+                const clean = String(rawText).trim().toUpperCase();
+
+                // Filtro Anti-Rebote (1.4 seg para el mismo código exacto)
+                const nowMs = Date.now();
+                if (lastScannedRef.current.code === clean && (nowMs - lastScannedRef.current.time) < 1400) {
+                    return;
+                }
+                lastScannedRef.current = { code: clean, time: nowMs };
+
+                // Extraer ID de Expediente (Formato QR: SEDE|001-00124|CLIENTE)
+                let idDetectado = '';
+                let clienteQR = '';
+                if (clean.includes('|')) {
+                    const partes = clean.split('|').map(p => p.trim());
+                    idDetectado = partes[1] ? formatIdExpediente(partes[1].includes('-') ? partes[1].split('-')[1] : partes[1]) : '';
+                    clienteQR = partes[2] || '';
+                } else {
+                    const base = clean.includes('-') ? clean.split('-')[1] : clean;
+                    idDetectado = formatIdExpediente(base);
+                }
+
+                if (!idDetectado) {
+                    playSound('alert');
+                    setScanFeedback({ type: 'error', title: 'CÓDIGO QR INVÁLIDO', subtitle: clean });
+                    return;
+                }
+
+                const exp = expedientesRef.current.find(x => x.id === idDetectado);
+                if (!exp) {
+                    playSound('alert');
+                    setScanFeedback({
+                        type: 'error',
+                        title: `EXPEDIENTE ${idDetectado} NO EXISTE EN ${sedeActual}`,
+                        subtitle: clienteQR ? `Etiqueta: ${clienteQR}` : 'Regístralo primero en Base de Datos'
+                    });
+                    return;
+                }
+
+                const hoySesion = getHoyId();
+                const estadoPrevio = JSON.parse(JSON.stringify(exp));
+
+                // MODO 1: INVENTARIO EN VIVO MULTICAJERO
+                if (scanMode === 'INVENTARIO') {
+                    if (exp.invSesion === hoySesion && exp.invFecha) {
+                        playSound('duplicate');
+                        setScanFeedback({
+                            type: 'warning',
+                            title: `⚠️ YA CONTABILIZADO: ${exp.id}`,
+                            subtitle: `${exp.cliente} — Registrado por ${exp.invCajero || 'CAJERO'} (${exp.invFecha})`
+                        });
+                        return;
+                    }
+
+                    const esRestringido = exp.estadoCredito === 'LISTA NEGRA' || exp.estadoCredito === 'MORA DURA';
+                    playSound(esRestringido ? 'alert' : 'beep');
+
+                    const horaActual = getFechaHora();
+                    const estabaFuera = !exp.ubicacionFisica.includes('CAJA');
+                    const nuevoHist = [...(exp.historial || [])];
+                    nuevoHist.unshift({
+                        fecha: horaActual,
+                        accion: 'INVENTARIO QR',
+                        detalle: `Verificado en estante por ${operadorNombre}${estabaFuera ? ' (Retornado automáticamente a Caja)' : ''}`
+                    });
+
+                    const actualizado = {
+                        ...exp,
+                        ubicacionFisica: 'CAJA (ARCHIVO)',
+                        fechaUltimoMov: horaActual,
+                        invFecha: horaActual,
+                        invCajero: operadorNombre,
+                        invSesion: hoySesion,
+                        historial: nuevoHist
+                    };
+
+                    setExpedientes(prev => prev.map(item => item.id === exp.id ? actualizado : item));
+                    setScanLog(prev => [{ id: exp.id, cliente: exp.cliente, prev: estadoPrevio }, ...prev.slice(0, 29)]);
+                    setScanFeedback({
+                        type: esRestringido ? 'danger_ok' : 'success',
+                        title: `✅ INVENTARIO REGISTRADO: ${exp.id}`,
+                        subtitle: `${exp.cliente} | Estado: ${exp.estadoCredito}${estabaFuera ? ' | 🔄 Devuelto a CAJA' : ''}`
+                    });
+
+                    const resp = await syncExpedienteCloud(actualizado, true, true);
+                    if (resp && resp.status === 'duplicate_inv') {
+                        playSound('duplicate');
+                        setScanFeedback({
+                            type: 'warning',
+                            title: `⚠️ YA CONTABILIZADO EN OTRO CELULAR: ${exp.id}`,
+                            subtitle: `Registrado por ${resp.invCajero} (${resp.invFecha})`
+                        });
+                    }
+                    return;
+                }
+
+                // MODO 2: RETORNO INTELIGENTE A CAJA (SIN ELEGIR ASESOR)
+                if (scanMode === 'RETORNO') {
+                    playSound('beep');
+                    const horaActual = getFechaHora();
+                    const ubicacionPrevia = exp.ubicacionFisica;
+                    const nuevoHist = [...(exp.historial || [])];
+                    nuevoHist.unshift({
+                        fecha: horaActual,
+                        accion: 'DEVOLUCIÓN QR',
+                        detalle: `Retornado físicamente a Caja por ${operadorNombre} (Antes: ${ubicacionPrevia})`
+                    });
+
+                    const actualizado = {
+                        ...exp,
+                        ubicacionFisica: 'CAJA (ARCHIVO)',
+                        fechaUltimoMov: horaActual,
+                        historial: nuevoHist
+                    };
+
+                    setExpedientes(prev => prev.map(item => item.id === exp.id ? actualizado : item));
+                    setScanLog(prev => [{ id: exp.id, cliente: exp.cliente, prev: estadoPrevio }, ...prev.slice(0, 29)]);
+                    setScanFeedback({
+                        type: 'success',
+                        title: `📥 DEVUELTO A CAJA: ${exp.id}`,
+                        subtitle: `${exp.cliente} (Retornado de: ${ubicacionPrevia})`
+                    });
+                    syncExpedienteCloud(actualizado, true);
+                    return;
+                }
+
+                // MODO 3: SALIDA / PRÉSTAMO POR LOTE A ASESOR
+                if (scanMode === 'PRESTAMO') {
+                    if (!asesorLote) {
+                        playSound('alert');
+                        setScanFeedback({
+                            type: 'error',
+                            title: 'SELECCIONA UN ASESOR PRIMERO',
+                            subtitle: 'Elige al asesor arriba antes de escanear las carpetas de salida'
+                        });
+                        return;
+                    }
+
+                    const esRestringido = exp.estadoCredito === 'LISTA NEGRA' || exp.estadoCredito === 'MORA DURA';
+                    playSound(esRestringido ? 'alert' : 'beep');
+
+                    const horaActual = getFechaHora();
+                    const prestamoCruzado = !exp.ubicacionFisica.includes('CAJA') && exp.ubicacionFisica !== `CON ASESOR: ${asesorLote}`;
+                    const nuevoHist = [...(exp.historial || [])];
+                    nuevoHist.unshift({
+                        fecha: horaActual,
+                        accion: 'PRÉSTAMO QR',
+                        detalle: `Entregado a ${asesorLote} por ${operadorNombre}${prestamoCruzado ? ` (Transferido desde ${exp.ubicacionFisica})` : ''}`
+                    });
+
+                    const actualizado = {
+                        ...exp,
+                        ubicacionFisica: `CON ASESOR: ${asesorLote}`,
+                        fechaUltimoMov: horaActual,
+                        historial: nuevoHist
+                    };
+
+                    setExpedientes(prev => prev.map(item => item.id === exp.id ? actualizado : item));
+                    setScanLog(prev => [{ id: exp.id, cliente: exp.cliente, prev: estadoPrevio }, ...prev.slice(0, 29)]);
+                    setScanFeedback({
+                        type: esRestringido ? 'danger_ok' : (prestamoCruzado ? 'warning' : 'success'),
+                        title: `📤 ENTREGADO A ${asesorLote}: ${exp.id}`,
+                        subtitle: `${exp.cliente} | Estado: ${exp.estadoCredito}${prestamoCruzado ? ` | ⚠️ Figuraba ${exp.ubicacionFisica}` : ''}`
+                    });
+                    syncExpedienteCloud(actualizado, true);
+                }
+            };
+
+            const deshacerUltimoEscaneo = async () => {
+                if (scanLog.length === 0) return;
+                const ultimo = scanLog[0];
+                const restaurado = ultimo.prev;
+                setExpedientes(prev => prev.map(item => item.id === restaurado.id ? restaurado : item));
+                setScanLog(prev => prev.slice(1));
+                setScanFeedback({
+                    type: 'warning',
+                    title: `↩️ ESCANEO DESHECHO: ${restaurado.id}`,
+                    subtitle: `Se restauró el estado anterior de ${restaurado.cliente}`
+                });
+                await syncExpedienteCloud(restaurado, true);
+            };
+
+            const reiniciarInventarioSede = async () => {
+                if (!confirm(`¿Iniciar un nuevo arqueo de inventario en ${sedeActual}? Esto pondrá todos los expedientes como PENDIENTES de escanear.`)) return;
+                setIsLoading(true);
+                setLoadingMsg('Reiniciando contadores de inventario en la sede...');
+                try {
+                    await fetch(API_URL, {
+                        method: 'POST',
+                        body: JSON.stringify({ action: 'resetInventario', sede: sedeActual, usuario: operadorNombre })
+                    });
+                    setExpedientes(prev => prev.map(e => ({ ...e, invFecha: '', invCajero: '', invSesion: '' })));
+                    setScanLog([]);
+                    setScanFeedback(null);
+                } catch (e) {
+                    alert('Error al reiniciar el inventario.');
+                }
+                setIsLoading(false);
+            };
+
+            // CICLO DE CÁMARA CONTINUA HTML5-QRCODE
+            React.useEffect(() => {
+                if (view !== 'escaner' && cameraActive) setCameraActive(false);
+            }, [view]);
+
+            React.useEffect(() => {
+                let html5QrCode = null;
+                if (cameraActive && view === 'escaner' && puedeOperarCaja) {
+                    html5QrCode = new window.Html5Qrcode("qr-reader-box");
+                    html5QrCode.start(
+                        { facingMode: "environment" },
+                        { fps: 24, qrbox: { width: 230, height: 230 }, aspectRatio: 1.0 },
+                        (decodedText) => procesarLecturaQR(decodedText),
+                        () => {}
+                    ).catch(() => {
+                        alert("No se pudo abrir la cámara. Verifica los permisos del navegador.");
+                        setCameraActive(false);
+                    });
+                }
+                return () => {
+                    if (html5QrCode && html5QrCode.isScanning) {
+                        html5QrCode.stop().then(() => html5QrCode.clear()).catch(() => {});
+                    }
+                };
+            }, [cameraActive, view, scanMode, asesorLote]);
+
+            // =====================================================================
+            // REGISTRO, CATEGORIZACIÓN Y EDICIÓN DE EXPEDIENTES
+            // =====================================================================
+            const [formInv, setFormInv] = React.useState({ idExp: '', cliente: '', estadoCredito: 'ACTIVO', asesorTitular: '', categoriaExtra: '', generarTicket: true });
+            const [editMode, setEditMode] = React.useState(null);
+            const [historialVisible, setHistorialVisible] = React.useState(null);
+            const csvInputRef = React.useRef(null);
+
+            const registrarExpediente = async (e) => {
+                e.preventDefault();
+                if (!puedeOperarCaja) return;
+                if (!formInv.asesorTitular) return alert("Debes seleccionar un Asesor Titular.");
+                if (!formInv.idExp) return alert("Ingresa el N° de Expediente.");
+                
+                let idFinal = formatIdExpediente(formInv.idExp);
+                if (!idFinal) return alert("El N° de Expediente debe contener números.");
+                
+                while (expedientes.some(x => x.id === idFinal)) {
+                    const correccion = prompt(`❌ EXPEDIENTE DUPLICADO.\nEl N° de Expediente ${idFinal} ya existe en ${sedeActual}.\n\nIngresa el N° correcto:`);
+                    if (correccion === null || correccion.trim() === '') return;
+                    idFinal = formatIdExpediente(correccion);
+                }
+
+                const nuevo = {
+                    id: idFinal, 
+                    dni: 'CONFIDENCIAL',
+                    cliente: formInv.cliente.toUpperCase().trim(),
+                    estadoCredito: formInv.estadoCredito, 
+                    asesorTitular: formInv.asesorTitular,
+                    ubicacionFisica: 'CAJA (ARCHIVO)', 
+                    fechaUltimoMov: getFechaHora(),
+                    invFecha: '',
+                    invCajero: '',
+                    invSesion: '',
+                    categoriaExtra: formInv.categoriaExtra.toUpperCase().trim(),
+                    historial: [{ fecha: getFechaHora(), accion: 'CREACIÓN', detalle: `Ingreso inicial a Caja por ${operadorNombre}` }]
+                };
+                
+                setExpedientes([nuevo, ...expedientes]);
+                if (formInv.generarTicket) {
+                    setTicketsQueue([...ticketsQueue, { id: idFinal, cliente: nuevo.cliente, sede: sedeActual }]);
+                }
+                setFormInv({ idExp: '', cliente: '', estadoCredito: 'ACTIVO', asesorTitular: '', categoriaExtra: '', generarTicket: formInv.generarTicket });
+                
+                await syncExpedienteCloud(nuevo);
+                alert(`✅ Expediente ${idFinal} registrado en la nube.`);
+            };
+
+            // EDICIÓN COMPLETA Y CATEGORIZACIÓN (EXCLUSIVO GERENTES)
+            const guardarEdicionGerencial = async (expActual) => {
+                if (!esGerente || !editMode) return;
+                setIsLoading(true);
+                setLoadingMsg('Actualizando categorización y datos del expediente...');
+                try {
+                    const res = await fetch(API_URL, {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            action: 'editarCategorizacion',
+                            sede: sedeActual,
+                            id: expActual.id,
+                            cliente: editMode.nuevoCliente,
+                            estadoCredito: editMode.nuevoEstado,
+                            asesorTitular: editMode.nuevoAsesor,
+                            ubicacionFisica: editMode.nuevaUbicacion,
+                            categoriaExtra: editMode.nuevaCatExtra,
+                            usuario: operadorNombre
+                        })
+                    });
+                    const data = await res.json();
+                    if (data.status === 'success') {
+                        const ahora = getFechaHora();
+                        const nuevoHist = [...(expActual.historial || [])];
+                        nuevoHist.unshift({
+                            fecha: ahora,
+                            accion: `EDICIÓN GERENCIAL (${operadorNombre})`,
+                            detalle: `Estado: ${editMode.nuevoEstado} | Titular: ${editMode.nuevoAsesor} | Ubic: ${editMode.nuevaUbicacion}`
+                        });
+                        const actualizado = {
+                            ...expActual,
+                            cliente: editMode.nuevoCliente.toUpperCase(),
+                            estadoCredito: editMode.nuevoEstado,
+                            asesorTitular: editMode.nuevoAsesor,
+                            ubicacionFisica: editMode.nuevaUbicacion,
+                            categoriaExtra: editMode.nuevaCatExtra.toUpperCase(),
+                            fechaUltimoMov: ahora,
+                            historial: nuevoHist
+                        };
+                        setExpedientes(expedientes.map(x => x.id === expActual.id ? actualizado : x));
+                        setEditMode(null);
+                    } else {
+                        alert(`❌ Error: ${data.message}`);
+                    }
+                } catch (e) {
+                    alert('❌ Error al actualizar el expediente.');
+                }
+                setIsLoading(false);
+            };
+
+            // =====================================================================
+            // BUSCADOR MANUAL DE PRÉSTAMOS / DEVOLUCIONES (CAJEROS Y GERENTES)
+            // =====================================================================
+            const [movBusqueda, setMovBusqueda] = React.useState('');
+            const [sugerencias, setSugerencias] = React.useState([]);
+            const [expEncontrado, setExpEncontrado] = React.useState(null);
+
+            const handleLiveSearch = (e) => {
+                const val = e.target.value.toUpperCase();
+                setMovBusqueda(val);
+                if (val.length < 1) { setSugerencias([]); return; }
+                const termNormalized = val.replace(/^(001-)?0*/, ''); 
+                
+                const matches = expedientes.filter(exp => {
+                    const idNorm = String(exp.id).toUpperCase().replace(/^(001-)?0*/, '');
+                    return exp.cliente.includes(val) || idNorm.includes(termNormalized);
+                });
+                setSugerencias(matches.slice(0, 6));
+            };
+
+            const seleccionarExpediente = (exp) => { setExpEncontrado(exp); setMovBusqueda(''); setSugerencias([]); };
+
+            const prestarExpediente = async (quienPresta) => {
+                if (!puedeOperarCaja) return;
+                if (!quienPresta) return alert("Selecciona a quién se entrega el expediente.");
+                const expActualizado = { ...expEncontrado, ubicacionFisica: `CON ASESOR: ${quienPresta}`, fechaUltimoMov: getFechaHora() };
+                expActualizado.historial = [{ fecha: getFechaHora(), accion: 'PRÉSTAMO', detalle: `Entregado físico a ${quienPresta} por ${operadorNombre}` }, ...(expEncontrado.historial || [])];
+                setExpedientes(expedientes.map(e => e.id === expActualizado.id ? expActualizado : e));
+                setExpEncontrado(null);
+                await syncExpedienteCloud(expActualizado);
+                alert(`✅ Expediente prestado a ${quienPresta}`);
+            };
+
+            const devolverCaja = async (ubicacionDestino = 'CAJA (ARCHIVO)') => {
+                if (!puedeOperarCaja) return;
+                const expActualizado = { ...expEncontrado, ubicacionFisica: ubicacionDestino, fechaUltimoMov: getFechaHora() };
+                expActualizado.historial = [{ fecha: getFechaHora(), accion: 'DEVOLUCIÓN', detalle: `Retornado a ${ubicacionDestino} por ${operadorNombre}` }, ...(expEncontrado.historial || [])];
+                setExpedientes(expedientes.map(e => e.id === expActualizado.id ? expActualizado : e));
+                setExpEncontrado(null);
+                await syncExpedienteCloud(expActualizado);
+                alert(`✅ Expediente retornado a ${ubicacionDestino}.`);
+            };
+
+            // =====================================================================
+            // FILTROS Y BUSCADOR DE SEDE (PARA ADMINISTRADORES, CAJEROS Y GERENTES)
+            // =====================================================================
+            const [dashSearchQuery, setDashSearchQuery] = React.useState('');
+            const [dashFilterAsesor, setDashFilterAsesor] = React.useState('TODOS');
+            const [dashFilterEstado, setDashFilterEstado] = React.useState('TODOS');
+            const [dashFiltroUbicacion, setDashFiltroUbicacion] = React.useState('TODOS');
+            const [dashFiltroInv, setDashFiltroInv] = React.useState('TODOS');
+            const [modalReporte, setModalReporte] = React.useState(false);
+
+            const hoySesionId = getHoyId();
+            let listaDash = expedientes;
+
+            // Filtro por Búsqueda de Número o Nombre del Cliente
+            if (dashSearchQuery.trim() !== '') {
+                const q = dashSearchQuery.toUpperCase().trim();
+                const qNum = q.replace(/^(001-)?0*/, '');
+                listaDash = listaDash.filter(e => {
+                    const idNorm = String(e.id).toUpperCase().replace(/^(001-)?0*/, '');
+                    return e.cliente.includes(q) || e.id.includes(q) || (qNum && idNorm.includes(qNum));
+                });
+            }
+            if (dashFilterAsesor !== 'TODOS') listaDash = listaDash.filter(e => e.asesorTitular === dashFilterAsesor);
+            if (dashFilterEstado !== 'TODOS') listaDash = listaDash.filter(e => e.estadoCredito === dashFilterEstado);
+            if (dashFiltroUbicacion === 'CAJA') listaDash = listaDash.filter(e => e.ubicacionFisica.includes('CAJA'));
+            if (dashFiltroUbicacion === 'CAMPO') listaDash = listaDash.filter(e => !e.ubicacionFisica.includes('CAJA'));
+            if (dashFiltroInv === 'CONTABILIZADO') listaDash = listaDash.filter(e => e.invSesion === hoySesionId && e.invFecha);
+            if (dashFiltroInv === 'FALTANTE') listaDash = listaDash.filter(e => !(e.invSesion === hoySesionId && e.invFecha));
+
+            const totalContabilizadosHoy = expedientes.filter(e => e.invSesion === hoySesionId && e.invFecha).length;
+
+            // =====================================================================
+            // EXPORTACIÓN CSV Y PDF DE FILTROS (EXCLUSIVO PARA GERENTES)
+            // =====================================================================
+            const exportarCSV = (soloSeleccionFiltrada = false) => {
+                if (!puedeExportar) return alert("⛔ Solo los Gerentes tienen autorización para exportar registros.");
+                const fuente = soloSeleccionFiltrada ? listaDash : expedientes;
+                if (fuente.length === 0) return alert("No hay datos para exportar.");
+                const now = new Date();
+                const fileName = `${now.getDate()}-${now.getMonth() + 1}-${now.getFullYear()} - EXPEDIENTES_${sedeActual}.csv`;
+
+                let csv = "ID_Expediente,DNI,Cliente,Estado_Credito,Asesor_Titular,Ubicacion_Fisica,Fecha_Ultimo_Movimiento,Inventario_Fecha,Inventario_Cajero,Categoria_Extra,Historial_JSON\n";
+                fuente.forEach(e => { 
+                    const histStr = JSON.stringify(e.historial || []).replace(/"/g, '""');
+                    csv += `"${e.id}","${e.dni}","${e.cliente}","${e.estadoCredito}","${e.asesorTitular}","${e.ubicacionFisica}","${e.fechaUltimoMov}","${e.invFecha || ''}","${e.invCajero || ''}","${e.categoriaExtra || ''}","${histStr}"\n`; 
+                });
+                const blob = new Blob(["\uFEFF" + csv], { type: 'text/csv;charset=utf-8;' });
+                const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = fileName; a.click();
+            };
+
+            const generarReportePDF = (tipoReporte) => {
+                if (!puedeExportar) return alert("⛔ Solo los Gerentes tienen autorización para exportar reportes PDF.");
+                const { jsPDF } = window.jspdf;
+                const doc = new jsPDF();
+                
+                doc.setFont("georgia", "bold"); doc.setTextColor(89, 180, 71); doc.setFontSize(22);
+                doc.text("CREDIBAN", 14, 20);
+                doc.setFont("helvetica", "normal"); doc.setTextColor(100, 100, 100); doc.setFontSize(9);
+                doc.text(`Reporte Oficial de Expedientes (${sedeActual}) - Exportado por Gerencia (${operadorNombre}): ${getFechaHora()}`, 14, 26);
+                
+                doc.setTextColor(40, 40, 40); doc.setFontSize(10); doc.setFont("helvetica", "bold");
+                let titulo = `Filtros: Asesor: ${dashFilterAsesor} | Estado: ${dashFilterEstado} | Ubicación: ${dashFiltroUbicacion} | Inv: ${dashFiltroInv}`;
+                doc.text(titulo, 14, 33);
+
+                if (tipoReporte === 'DETALLADO') {
+                    const tableData = listaDash.map(e => [
+                        e.id,
+                        e.cliente,
+                        e.estadoCredito,
+                        e.asesorTitular,
+                        e.ubicacionFisica,
+                        (e.invSesion === hoySesionId && e.invFecha) ? `REGISTRADO (${e.invCajero})` : 'PENDIENTE'
+                    ]);
+                    doc.autoTable({
+                        startY: 38, head: [['N° EXP', 'CLIENTE', 'ESTADO', 'TITULAR', 'UBICACIÓN FÍSICA', 'INVENTARIO HOY']],
+                        body: tableData, theme: 'grid', styles: { fontSize: 8 }, headStyles: { fillColor: [89, 180, 71] }
+                    });
+                } else { 
+                    doc.autoTable({
+                        startY: 38, head: [['MÉTRICA ESTADÍSTICA DE LA SELECCIÓN', 'CANTIDAD EXACTA']],
+                        body: [
+                            ['Total de Expedientes en esta selección', listaDash.length],
+                            ['Resguardados físicamente en Caja', listaDash.filter(e => e.ubicacionFisica.includes('CAJA')).length],
+                            ['Prestados / En Campo (Fuera de Caja)', listaDash.filter(e => !e.ubicacionFisica.includes('CAJA')).length],
+                            ['Estado Crediticio: ACTIVO', listaDash.filter(e => e.estadoCredito === 'ACTIVO').length],
+                            ['Estado Crediticio: MORA DURA / LISTA NEGRA', listaDash.filter(e => e.estadoCredito === 'MORA DURA' || e.estadoCredito === 'LISTA NEGRA').length],
+                            ['Inventario QR Registrado Hoy', listaDash.filter(e => e.invSesion === hoySesionId && e.invFecha).length]
+                        ], theme: 'grid', styles: { fontSize: 10 }, headStyles: { fillColor: [89, 180, 71] }
+                    });
+                }
+                doc.save(`Reporte_Crediban_${sedeActual}_${tipoReporte}_${Date.now()}.pdf`);
+                setModalReporte(false);
+            };
+
+            // CARGA MASIVA CSV (PARA CAJEROS Y GERENTES)
+            const parseCSVLine = (line) => {
+                const result = []; let current = ''; let inQuotes = false;
+                for (let i = 0; i < line.length; i++) {
+                    const char = line[i];
+                    if (char === '"') {
+                        if (inQuotes && line[i+1] === '"') { current += '"'; i++; } 
+                        else { inQuotes = !inQuotes; }
+                    }
+                    else if (char === ',' && !inQuotes) { result.push(current.trim()); current = ''; }
+                    else current += char;
+                }
+                result.push(current.trim());
+                return result.map(s => s.replace(/^"|"$/g, '').trim());
+            };
+
+            const importarCSV = async (e) => {
+                if (!puedeOperarCaja) return;
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = async (evt) => {
+                    const lines = evt.target.result.split('\n');
+                    let count = 0; let nuevos = [...expedientes]; let nuevosAsesores = [...asesores];
+                    let listaParaLaNube = [];
+
+                    for (let i = 1; i < lines.length; i++) {
+                        if (!lines[i].trim()) continue;
+                        const cols = parseCSVLine(lines[i]);
+                        if (cols.length >= 5) {
+                            let rawId = cols[0];
+                            let baseNum = rawId.includes('-') ? rawId.split('-')[1] : rawId;
+                            let idFormal = formatIdExpediente(baseNum);
+
+                            const dni = cols[1] ? cols[1].replace(/\D/g, '') : 'CONFIDENCIAL';
+                            const cliente = cols[2] ? cols[2].toUpperCase() : '';
+                            const estado = cols[3] ? cols[3].toUpperCase() : 'ACTIVO';
+                            const asesor = cols[4] ? cols[4].toUpperCase() : '';
+                            const ubicacionFisica = cols[5] ? cols[5].toUpperCase() : 'CAJA (ARCHIVO)';
+                            const fechaUltimoMov = cols[6] ? cols[6] : getFechaHora();
+
+                            let historialRescatado = [{ fecha: getFechaHora(), accion: 'MIGRACIÓN / CARGA', detalle: `Ingresado masivamente por ${operadorNombre}` }];
+                            if (cols[7] && cols[7].trim().startsWith('[')) {
+                                try { historialRescatado = JSON.parse(cols[7]); } catch(err) {}
+                            }
+
+                            if (idFormal && !nuevos.some(x => x.id === idFormal)) {
+                                const exp = {
+                                    id: idFormal, dni, cliente, estadoCredito: estado, asesorTitular: asesor,
+                                    ubicacionFisica, fechaUltimoMov, historial: historialRescatado,
+                                    invFecha: '', invCajero: '', invSesion: '', categoriaExtra: ''
+                                };
+                                nuevos.push(exp);
+                                listaParaLaNube.push(exp);
+                                count++;
+                                if (asesor && !nuevosAsesores.includes(asesor)) nuevosAsesores.push(asesor);
+                            }
+                        }
+                    }
+                    setExpedientes(nuevos); setAsesores(nuevosAsesores);
+                    if (listaParaLaNube.length > 0) {
+                        setIsLoading(true);
+                        setLoadingMsg('Subiendo lote masivo a Google Sheets...');
+                        await fetch(API_URL, {
+                            method: 'POST',
+                            body: JSON.stringify({ action: 'bulkSave', sede: sedeActual, usuario: operadorNombre, data: listaParaLaNube })
+                        });
+                        setIsLoading(false);
+                        alert(`✅ Carga Exitosa: Se migraron ${count} expedientes a ${sedeActual}.`);
+                    }
+                };
+                reader.readAsText(file); e.target.value = '';
+            };
+
+            // =====================================================================
+            // GENERADOR MASIVO DE TICKETS QR (A4 - 4x6 = 24 TICKETS POR HOJA)
+            // =====================================================================
+            const [manualId, setManualId] = React.useState('');
+            const [manualCliente, setManualCliente] = React.useState('');
+            const [rangoDesde, setRangoDesde] = React.useState('');
+            const [rangoHasta, setRangoHasta] = React.useState('');
+            const [excelPasteText, setExcelPasteText] = React.useState('');
+
+            const agregarTicketManual = (e) => {
+                e.preventDefault();
+                if (!manualId || !manualCliente) return;
+                const idFormal = formatIdExpediente(manualId);
+                if (!idFormal) return alert("El N° de Expediente debe contener números.");
+                setTicketsQueue([...ticketsQueue, { id: idFormal, cliente: manualCliente.toUpperCase(), sede: sedeActual }]);
+                setManualId(''); setManualCliente('');
+            };
+
+            const cargarTicketsDesdeBase = (soloRango = false) => {
+                if (expedientes.length === 0) return alert("No hay expedientes en la base de esta sede.");
+                let filtrados = [...expedientes];
+                if (soloRango) {
+                    const d = parseInt(rangoDesde.replace(/\D/g, ''), 10) || 1;
+                    const h = parseInt(rangoHasta.replace(/\D/g, ''), 10) || 999999;
+                    filtrados = filtrados.filter(e => {
+                        const num = parseInt(String(e.id).split('-')[1] || e.id, 10);
+                        return num >= d && num <= h;
+                    });
+                }
+                if (filtrados.length === 0) return alert("Ningún expediente coincide con ese rango.");
+                filtrados.sort((a, b) => a.id.localeCompare(b.id));
+                const nuevosTickets = filtrados.map(e => ({ id: e.id, cliente: e.cliente, sede: sedeActual }));
+                setTicketsQueue([...ticketsQueue, ...nuevosTickets]);
+                alert(`✅ Se cargaron ${nuevosTickets.length} etiquetas con Código QR a la cola de impresión.`);
+            };
+
+            const procesarPegadoMasivoExcel = () => {
+                if (!excelPasteText.trim()) return;
+                const lineas = excelPasteText.trim().split('\n');
+                const generados = [];
+                lineas.forEach(l => {
+                    const partes = l.split(/\t|,|;/).map(s => s.trim()).filter(Boolean);
+                    if (partes.length >= 2) {
+                        const rawNum = partes[0].includes('-') ? partes[0].split('-')[1] : partes[0];
+                        const idF = formatIdExpediente(rawNum);
+                        const cli = partes.slice(1).join(' ').toUpperCase();
+                        if (idF && cli) generados.push({ id: idF, cliente: cli, sede: sedeActual });
+                    }
+                });
+                if (generados.length === 0) return alert("Pega al menos 2 columnas desde Excel: N° Expediente y Nombre del Cliente.");
+                setTicketsQueue([...ticketsQueue, ...generados]);
+                setExcelPasteText('');
+                alert(`✅ Se generaron ${generados.length} etiquetas QR listas para imprimir.`);
+            };
+
+            const parseTicketName = (fullName) => {
+                const words = fullName.trim().split(/\s+/);
+                if (words.length <= 2) return { part1: fullName, part2: '' };
+                return { part1: `${words[0]} ${words[1]}`, part2: words.slice(2).join(' ') };
+            };
+
+            const getTicketNameStyle = (name) => {
+                const len = name.length;
+                if (len >= 35) return 'text-[10px] leading-[1.05]';
+                if (len >= 20) return 'text-[12px] leading-[1.1]';
+                return 'text-[14px] leading-[1.1]'; 
+            };
+
+            const processTicketsForPrint = () => {
+                const paddedQueue = [...ticketsQueue];
+                const rem = paddedQueue.length % 24;
+                if (rem > 0 || paddedQueue.length === 0) {
+                    const toAdd = paddedQueue.length === 0 ? 24 : 24 - rem;
+                    for (let i = 0; i < toAdd; i++) paddedQueue.push({ isEmpty: true });
+                }
+                const pages = [];
+                for (let i = 0; i < paddedQueue.length; i += 24) pages.push(paddedQueue.slice(i, i + 24));
+                return pages;
+            };
+            const printPages = processTicketsForPrint();
+
+            // =====================================================================
+            // GESTIÓN DINÁMICA DE PARÁMETROS Y SINCRONIZACIÓN (GERENCIA)
+            // =====================================================================
+            const [nuevoParamValor, setNuevoParamValor] = React.useState('');
+            const [nuevoParamTipo, setNuevoParamTipo] = React.useState('ASESOR'); // 'ASESOR' | 'ESTADO_CREDITO' | 'UBICACION' | 'SEDE'
+
+            const agregarParametroCloud = async (e) => {
+                e.preventDefault();
+                if (!esGerente || !nuevoParamValor.trim()) return;
+                setIsLoading(true);
+                setLoadingMsg(`Agregando ${nuevoParamTipo} al sistema...`);
+                try {
+                    const res = await fetch(API_URL, {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            action: nuevoParamTipo === 'SEDE' ? 'crearSede' : 'addParametro',
+                            tipo: nuevoParamTipo,
+                            valor: nuevoParamValor.toUpperCase().trim(),
+                            nuevaSede: nuevoParamValor.toUpperCase().trim(),
+                            sedeAplica: nuevoParamTipo === 'ASESOR' ? sedeActual : 'GLOBAL',
+                            usuario: operadorNombre
+                        })
+                    });
+                    const data = await res.json();
+                    if (data.status === 'success') {
+                        if (data.parametros) aplicarCatalogoParametros(data.parametros);
+                        if (nuevoParamTipo === 'ASESOR' && !asesores.includes(nuevoParamValor.toUpperCase().trim())) {
+                            setAsesores([...asesores, nuevoParamValor.toUpperCase().trim()]);
+                        }
+                        setNuevoParamValor('');
+                    }
+                } catch (e) {
+                    alert('Error al guardar parámetro.');
+                }
+                setIsLoading(false);
+            };
+
+            const eliminarParametroCloud = async (tipo, valor) => {
+                if (!esGerente) return;
+                if (!confirm(`¿Deshabilitar "${valor}" de ${tipo}?`)) return;
+                setIsLoading(true);
+                setLoadingMsg('Actualizando parámetros...');
+                try {
+                    const res = await fetch(API_URL, {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            action: 'deleteParametro',
+                            tipo,
+                            valor,
+                            sedeAplica: sedeActual,
+                            usuario: operadorNombre
+                        })
+                    });
+                    const data = await res.json();
+                    if (data.status === 'success' && data.parametros) {
+                        aplicarCatalogoParametros(data.parametros);
+                        if (tipo === 'ASESOR') setAsesores(asesores.filter(a => a !== valor));
+                    }
+                } catch (e) {}
+                setIsLoading(false);
+            };
+
+            const forzarSyncUsuarios = async () => {
+                if (!esGerente) return;
+                setIsLoading(true);
+                setLoadingMsg('Sincronizando sedes, cargos y asesores con el Script Maestro de Usuarios...');
+                try {
+                    const res = await fetch(API_URL, {
+                        method: 'POST',
+                        body: JSON.stringify({ action: 'syncUsuarios', sede: sedeActual })
+                    });
+                    const data = await res.json();
+                    if (data.status === 'success') {
+                        if (data.parametros) aplicarCatalogoParametros(data.parametros);
+                        alert(`✅ Sincronización completada con éxito.\nUsuarios sincronizados: ${data.sync?.usuariosSincronizados || 'OK'}`);
+                    }
+                } catch (e) {
+                    alert('Error al sincronizar con el Script de Usuarios.');
+                }
+                setIsLoading(false);
+            };
+
+            // UI COMPONENTES REUTILIZABLES
+            const BadgeEstado = ({estado}) => {
+                const colors = {
+                    'ACTIVO': 'bg-green-100 text-green-700',
+                    'MORA DURA': 'bg-red-100 text-red-700 font-bold',
+                    'CANCELADO': 'bg-blue-100 text-blue-700',
+                    'LISTA NEGRA': 'bg-slate-800 text-white font-bold',
+                    'JUDICIAL': 'bg-purple-100 text-purple-800 font-bold',
+                    'REPROGRAMADO': 'bg-amber-100 text-amber-800 font-bold'
+                };
+                return <span className={`px-2 py-1 rounded text-[10px] font-bold ${colors[estado] || 'bg-slate-200 text-slate-700'}`}>{estado}</span>;
+            };
+
+            const ModalHistorial = ({ exp, onClose }) => (
+                <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4 modal-bg no-print">
+                    <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden flex flex-col max-h-[85vh]">
+                        <div className="p-4 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
+                            <div><h3 className="font-bold text-slate-800">Historial Inalterable</h3><p className="text-xs text-slate-500">{exp.cliente} | ID: {exp.id}</p></div>
+                            <button onClick={onClose} className="text-slate-400 hover:text-red-500 p-2"><i className="fa-solid fa-xmark fa-xl"></i></button>
+                        </div>
+                        <div className="p-6 overflow-y-auto flex-1 space-y-4">
+                            {(exp.historial || []).map((h, i) => (
+                                <div key={i} className="border-l-2 border-[#59B447] pl-4 relative">
+                                    <div className="absolute w-2 h-2 bg-[#59B447] rounded-full -left-[5px] top-1"></div>
+                                    <p className="text-[10px] text-slate-400 font-bold">{h.fecha}</p>
+                                    <p className="text-xs font-bold text-slate-700 mt-0.5">{h.accion}</p>
+                                    <p className="text-xs text-slate-600 mt-1">{h.detalle}</p>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            );
+
+            // =====================================================================
+            // PANTALLA DE LOGIN (ACCESO EXCLUSIVO: CAJEROS, ADMINISTRADORES, GERENTES)
+            // =====================================================================
+            if (!isAuth) {
+                return (
+                    <div className="min-h-screen login-bg flex flex-col items-center justify-center p-6 relative">
+                        {isLoading && (
+                            <div className="absolute inset-0 bg-slate-900/80 z-50 flex flex-col items-center justify-center backdrop-blur-sm">
+                                <i className="fa-solid fa-circle-notch fa-spin text-[#59B447] text-5xl mb-4"></i>
+                                <p className="text-white font-bold text-center px-4">{loadingMsg}</p>
+                            </div>
+                        )}
+                        <div className="glass-card bg-white/5 p-8 sm:p-10 rounded-3xl w-full max-w-md shadow-2xl border border-white/10 backdrop-blur-xl animate-fade-in text-center">
+                            <div className="w-16 h-16 mx-auto mb-3">
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 240"><g fill="#59B447"><rect x="90" y="8" width="24" height="13" rx="6.5"/><rect x="71" y="31" width="61" height="13" rx="6.5"/><rect x="50" y="55" width="74" height="13" rx="6.5"/><rect x="31" y="79" width="75" height="13" rx="6.5"/><rect x="24" y="103" width="63" height="13" rx="6.5"/><path d="M143 55 C141 78 130 95 111 107 C96 117 81 122 72 134 C62 147 63 166 70 181 C76 195 87 208 97 216 C107 201 118 189 131 177 C144 166 157 156 164 141 C173 123 173 104 168 89 C164 74 156 62 143 55 Z"/></g></svg>
+                            </div>
+                            <h1 className="text-[#59B447] font-bold text-3xl tracking-widest mb-1" style={{ fontFamily: "Georgia" }}>CREDIBAN</h1>
+                            <p className="text-slate-400 text-xs tracking-wider uppercase mb-2">Control de Expedientes & QR (V20)</p>
+                            <div className="inline-flex items-center gap-1.5 bg-slate-800/80 border border-slate-700 text-slate-300 text-[10px] font-bold px-3 py-1 rounded-full mb-5">
+                                <i className="fa-solid fa-shield-halved text-[#59B447]"></i>
+                                Acceso exclusivo: Cajeros • Administradores • Gerentes
+                            </div>
+
+                            {loginErrorMsg && (
+                                <div className="bg-red-500/20 border border-red-500 text-red-200 text-xs font-bold p-3.5 rounded-2xl mb-4 text-left">
+                                    {loginErrorMsg}
+                                </div>
+                            )}
+                            
+                            <form onSubmit={handleLogin} className="space-y-4">
+                                <div className="text-left">
+                                    <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5 ml-1">Sede (Filial)</label>
+                                    <select required value={sedeActual} onChange={e=>setSedeActual(e.target.value)} className="w-full p-3.5 bg-slate-900/50 border border-slate-700/50 rounded-2xl focus:ring-2 focus:ring-[#59B447] outline-none text-white font-bold">
+                                        {sedesDisponibles.map(s => <option key={s} value={s}>{s}</option>)}
+                                    </select>
+                                </div>
+                                <div className="text-left">
+                                    <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5 ml-1">Usuario (Sincronizado con Script de Usuarios)</label>
+                                    <div className="relative">
+                                        <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-500"><i className="fa-solid fa-user-lock"></i></div>
+                                        <input type="text" required value={usuarioInput} onChange={e=>setUsuarioInput(e.target.value)} className="w-full pl-12 p-3.5 bg-slate-900/50 border border-slate-700/50 rounded-2xl focus:ring-2 focus:ring-[#59B447] outline-none text-white font-bold uppercase" placeholder="Ej. NOMBRE.A" />
+                                    </div>
+                                </div>
+                                <div className="text-left">
+                                    <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5 ml-1">Contraseña</label>
+                                    <div className="relative">
+                                        <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-500"><i className="fa-solid fa-lock"></i></div>
+                                        <input type="password" required value={passwordInput} onChange={e=>setPasswordInput(e.target.value)} className="w-full pl-12 p-3.5 bg-slate-900/50 border border-slate-700/50 rounded-2xl focus:ring-2 focus:ring-[#59B447] outline-none text-white font-mono tracking-widest" placeholder="••••••••" />
+                                    </div>
+                                </div>
+                                <button type="submit" className="w-full bg-gradient-to-r from-[#59B447] to-[#4a973a] text-white font-bold py-4 rounded-2xl shadow-lg mt-2 hover:from-[#4a973a] transition-all">
+                                    Validar Acceso <i className="fa-solid fa-right-to-bracket text-xs ml-2"></i>
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+                );
+            }
+
+            // =====================================================================
+            // INTERFAZ PRINCIPAL ADAPTADA AL ROL (CAJERO / ADMINISTRADOR / GERENTE)
+            // =====================================================================
+            return (
+                <div className="min-h-screen flex flex-col pb-10 relative">
+                    {isLoading && (
+                        <div className="fixed inset-0 bg-slate-900/50 z-50 flex items-center justify-center backdrop-blur-sm no-print">
+                            <div className="bg-white p-6 rounded-2xl shadow-2xl flex items-center gap-4">
+                                <i className="fa-solid fa-circle-notch fa-spin text-[#59B447] text-2xl"></i>
+                                <span className="font-bold text-slate-800">{loadingMsg}</span>
+                            </div>
+                        </div>
+                    )}
+
+                    {historialVisible && <ModalHistorial exp={historialVisible} onClose={() => setHistorialVisible(null)} />}
+                    {puedeOperarCaja && <input type="file" accept=".csv" className="hidden no-print" ref={csvInputRef} onChange={importarCSV} />}
+
+                    {/* Modal Reporte PDF (Exclusivo Gerentes) */}
+                    {modalReporte && puedeExportar && (
+                        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4 modal-bg no-print">
+                            <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden p-6 text-center">
+                                <i className="fa-solid fa-file-pdf text-5xl text-red-500 mb-4"></i>
+                                <h3 className="font-bold text-slate-800 text-lg mb-1">Exportar Reporte Gerencial PDF</h3>
+                                <p className="text-xs text-slate-500 mb-6">Se exportarán los registros respetando los filtros activos en pantalla.</p>
+                                <button onClick={() => generarReportePDF('DETALLADO')} className="w-full bg-slate-800 text-white font-bold py-3 rounded-lg mb-2 shadow hover:bg-slate-700">Reporte Detallado (Con Inventario)</button>
+                                <button onClick={() => generarReportePDF('PRECISO')} className="w-full bg-[#59B447] text-white font-bold py-3 rounded-lg shadow hover:bg-green-600 mb-4">Reporte Resumen (Totales)</button>
+                                <button onClick={() => setModalReporte(false)} className="text-xs text-slate-400 font-bold underline">Cancelar</button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* BARRA SUPERIOR CON INDICADOR DE ROL Y CONTROLES SEGÚN PERMISOS */}
+                    <header className="bg-white shadow-sm border-b border-slate-200 px-4 py-3 sticky top-0 z-40 no-print">
+                        <div className="max-w-7xl mx-auto">
+                            <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                                <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
+                                    <div className="w-7 h-7">
+                                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 240"><g fill="#59B447"><rect x="90" y="8" width="24" height="13" rx="6.5"/><rect x="71" y="31" width="61" height="13" rx="6.5"/><rect x="50" y="55" width="74" height="13" rx="6.5"/><rect x="31" y="79" width="75" height="13" rx="6.5"/><rect x="24" y="103" width="63" height="13" rx="6.5"/><path d="M143 55 C141 78 130 95 111 107 C96 117 81 122 72 134 C62 147 63 166 70 181 C76 195 87 208 97 216 C107 201 118 189 131 177 C144 166 157 156 164 141 C173 123 173 104 168 89 C164 74 156 62 143 55 Z"/></g></svg>
+                                    </div>
+                                    <span className="text-[#59B447] font-bold text-lg sm:text-xl tracking-widest" style={{ fontFamily: "Georgia" }}>CREDIBAN</span>
+
+                                    {/* Si es Gerente puede cambiar de filial en vivo; Cajero y Admin ven su sede fija */}
+                                    {esGerente ? (
+                                        <div className="flex items-center bg-blue-50 border border-blue-200 rounded-lg px-2 py-1">
+                                            <i className="fa-solid fa-building text-blue-600 text-xs mr-1.5"></i>
+                                            <select value={sedeActual} onChange={e => cambiarSedeActiva(e.target.value)} className="bg-transparent text-blue-900 font-black text-xs outline-none cursor-pointer">
+                                                {sedesDisponibles.map(s => <option key={s} value={s}>SEDE: {s}</option>)}
+                                            </select>
+                                        </div>
+                                    ) : (
+                                        <span className="bg-blue-100 text-blue-800 text-[11px] font-black px-2.5 py-1 rounded-lg">
+                                            <i className="fa-solid fa-building mr-1"></i> Sede: {sedeActual}
+                                        </span>
+                                    )}
+
+                                    <span className={`text-[10px] font-black px-2.5 py-1 rounded-lg ${
+                                        esGerente ? 'bg-purple-100 text-purple-800 border border-purple-300' :
+                                        esAdmin ? 'bg-amber-100 text-amber-800 border border-amber-300' :
+                                        'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                    }`}>
+                                        <i className="fa-solid fa-user-shield mr-1"></i> {operadorNombre} ({rolSistema})
+                                    </span>
+                                </div>
+
+                                <div className="flex gap-2 items-center">
+                                    <button onClick={() => setLiveSyncActive(!liveSyncActive)} className={`px-2.5 py-1.5 rounded text-[10px] font-bold border ${liveSyncActive ? 'bg-green-50 text-green-700 border-green-300' : 'bg-slate-100 text-slate-500 border-slate-300'}`}>
+                                        <i className={`fa-solid fa-rotate ${liveSyncActive ? 'fa-spin' : ''} mr-1`}></i>
+                                        {liveSyncActive ? `En Vivo (${lastSyncTime || 'ON'})` : 'Sync Pausado'}
+                                    </button>
+
+                                    {/* BOTÓN EXPORTAR CSV: EXCLUSIVO PARA GERENTES (OCULTO PARA ADMINISTRADORES Y CAJEROS) */}
+                                    {puedeExportar && (
+                                        <button onClick={() => exportarCSV(false)} className="bg-slate-800 text-white px-3 py-1.5 rounded text-xs font-bold shadow-sm hover:bg-slate-700">
+                                            <i className="fa-solid fa-file-csv mr-1"></i> Exportar Todo CSV
+                                        </button>
+                                    )}
+
+                                    <button onClick={() => { setCameraActive(false); setIsAuth(false); setExpedientes([]); setPasswordInput(''); }} className="bg-red-50 text-red-600 px-3 py-1.5 rounded text-xs font-bold shadow-sm hover:bg-red-100" title="Cerrar Sesión">
+                                        <i className="fa-solid fa-power-off"></i>
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* PESTAÑAS DE NAVEGACIÓN FILTRADAS ESTRICTAMENTE POR ROL */}
+                            <div className="flex gap-5 text-xs font-semibold text-slate-500 overflow-x-auto">
+                                {puedeOperarCaja && (
+                                    <button onClick={()=>setView('escaner')} className={`pb-2 whitespace-nowrap ${view==='escaner'?'tab-active':''}`}>
+                                        <i className="fa-solid fa-qrcode mr-1"></i> Escáner QR Ráfaga
+                                    </button>
+                                )}
+                                {puedeOperarCaja && (
+                                    <button onClick={()=>setView('movimientos')} className={`pb-2 whitespace-nowrap ${view==='movimientos'?'tab-active':''}`}>
+                                        <i className="fa-solid fa-exchange-alt mr-1"></i> Prestar / Devolver
+                                    </button>
+                                )}
+                                <button onClick={()=>setView('dashboard')} className={`pb-2 whitespace-nowrap ${view==='dashboard'?'tab-active':''}`}>
+                                    <i className="fa-solid fa-magnifying-glass-chart mr-1"></i> {esAdmin ? `Consulta y Filtros (${sedeActual})` : 'Buscador & Dashboard'}
+                                </button>
+                                {puedeOperarCaja && (
+                                    <button onClick={()=>setView('inventario')} className={`pb-2 whitespace-nowrap ${view==='inventario'?'tab-active':''}`}>
+                                        <i className="fa-solid fa-database mr-1"></i> {esGerente ? 'Base de Datos y Edición Total' : 'Registro de Expedientes'}
+                                    </button>
+                                )}
+                                {puedeOperarCaja && (
+                                    <button onClick={()=>setView('tickets')} className={`pb-2 whitespace-nowrap ${view==='tickets'?'tab-active':''}`}>
+                                        <i className="fa-solid fa-tags mr-1"></i> Generador Masivo QR (A4)
+                                    </button>
+                                )}
+                                {esGerente && (
+                                    <button onClick={()=>setView('parametros')} className={`pb-2 whitespace-nowrap ${view==='parametros'?'tab-active':''}`}>
+                                        <i className="fa-solid fa-sliders mr-1"></i> Parámetros y Categorías
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    </header>
+
+                    <main className="p-4 max-w-7xl mx-auto w-full flex-1 mt-2">
+                        {/* ===================================================================== */}
+                        {/* 1. ESCÁNER QR RÁFAGA Y TABLA MULTICAJERO EN VIVO (CAJEROS Y GERENTES) */}
+                        {/* ===================================================================== */}
+                        {view === 'escaner' && puedeOperarCaja && (
+                            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 animate-fade-in no-print">
+                                <div className="lg:col-span-5 space-y-4">
+                                    <div className="glass-card p-5 rounded-2xl border-t-4 border-[#59B447]">
+                                        <div className="flex justify-between items-center mb-3">
+                                            <h2 className="font-black text-slate-800 text-base uppercase"><i className="fa-solid fa-bolt text-[#59B447] mr-1"></i> Escáner QR Modo Ráfaga</h2>
+                                            <span className="text-[11px] font-bold bg-slate-100 px-2.5 py-1 rounded-full text-slate-700">
+                                                Contabilizados: <span className="text-[#59B447] font-black">{totalContabilizadosHoy} / {expedientes.length}</span>
+                                            </span>
+                                        </div>
+
+                                        <div className="grid grid-cols-3 gap-2 mb-4">
+                                            <button onClick={() => setScanMode('INVENTARIO')} className={`p-2.5 rounded-xl text-[11px] font-black border transition-all flex flex-col items-center gap-1 ${scanMode === 'INVENTARIO' ? 'bg-[#59B447] text-white border-[#59B447] shadow-md' : 'bg-slate-50 text-slate-600 border-slate-200'}`}>
+                                                <i className="fa-solid fa-boxes-stacked text-base"></i>
+                                                <span>1. INVENTARIO</span>
+                                            </button>
+                                            <button onClick={() => setScanMode('RETORNO')} className={`p-2.5 rounded-xl text-[11px] font-black border transition-all flex flex-col items-center gap-1 ${scanMode === 'RETORNO' ? 'bg-emerald-600 text-white border-emerald-600 shadow-md' : 'bg-slate-50 text-slate-600 border-slate-200'}`}>
+                                                <i className="fa-solid fa-arrow-right-to-bracket text-base"></i>
+                                                <span>2. RETORNO CAJA</span>
+                                            </button>
+                                            <button onClick={() => setScanMode('PRESTAMO')} className={`p-2.5 rounded-xl text-[11px] font-black border transition-all flex flex-col items-center gap-1 ${scanMode === 'PRESTAMO' ? 'bg-orange-500 text-white border-orange-500 shadow-md' : 'bg-slate-50 text-slate-600 border-slate-200'}`}>
+                                                <i className="fa-solid fa-hand-holding-hand text-base"></i>
+                                                <span>3. SALIDA LOTE</span>
+                                            </button>
+                                        </div>
+
+                                        {scanMode === 'PRESTAMO' && (
+                                            <div className="bg-orange-50 p-3 rounded-xl border border-orange-200 mb-4">
+                                                <label className="block text-[10px] font-black text-orange-800 uppercase mb-1">Entregar carpetas escaneadas a Asesor:</label>
+                                                <select value={asesorLote} onChange={e => setAsesorLote(e.target.value)} className="w-full p-2.5 border border-orange-300 rounded-lg bg-white text-sm font-bold text-slate-800">
+                                                    <option value="">-- Seleccionar Asesor --</option>
+                                                    {asesores.map(a => <option key={a} value={a}>{a}</option>)}
+                                                </select>
+                                            </div>
+                                        )}
+
+                                        <div className="bg-slate-900 rounded-2xl overflow-hidden relative min-h-[250px] flex flex-col items-center justify-center border-2 border-slate-800">
+                                            <div id="qr-reader-box" className="w-full"></div>
+                                            {!cameraActive && (
+                                                <div className="p-8 text-center">
+                                                    <i className="fa-solid fa-camera text-4xl text-slate-500 mb-3"></i>
+                                                    <p className="text-xs text-slate-300 mb-4">Pasa las carpetas frente a la cámara de corrido sin tocar botones.</p>
+                                                    <button onClick={() => setCameraActive(true)} className="bg-[#59B447] text-white font-black px-6 py-3 rounded-xl shadow-lg hover:bg-green-600 text-sm">
+                                                        <i className="fa-solid fa-play mr-2"></i> Encender Cámara Ráfaga
+                                                    </button>
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        {cameraActive && (
+                                            <button onClick={() => setCameraActive(false)} className="w-full mt-3 bg-red-50 text-red-600 font-bold py-2 rounded-xl border border-red-200 text-xs hover:bg-red-100">
+                                                <i className="fa-solid fa-stop mr-1"></i> Detener Cámara
+                                            </button>
+                                        )}
+
+                                        <form onSubmit={(e) => { e.preventDefault(); procesarLecturaQR(lectorFisicoInput); setLectorFisicoInput(''); }} className="mt-4 flex gap-2">
+                                            <input type="text" value={lectorFisicoInput} onChange={e => setLectorFisicoInput(e.target.value)} placeholder="O usa pistola lectora USB / digita N° Exp y Enter..." className="flex-1 p-2.5 border border-slate-300 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#59B447]" />
+                                            <button type="submit" className="bg-slate-800 text-white px-4 rounded-xl text-xs font-bold">Pasar</button>
+                                        </form>
+
+                                        {scanFeedback && (
+                                            <div className={`mt-4 p-4 rounded-xl border-l-4 shadow-md transition-all ${
+                                                scanFeedback.type === 'success' ? 'bg-green-50 border-green-600 text-green-900' :
+                                                scanFeedback.type === 'warning' ? 'bg-amber-50 border-amber-500 text-amber-900' :
+                                                scanFeedback.type === 'danger_ok' ? 'bg-red-600 border-red-900 text-white' :
+                                                'bg-red-50 border-red-600 text-red-900'
+                                            }`}>
+                                                <p className="font-black text-sm">{scanFeedback.title}</p>
+                                                <p className="text-xs mt-1 font-semibold opacity-90">{scanFeedback.subtitle}</p>
+                                            </div>
+                                        )}
+
+                                        <div className="flex gap-2 mt-4 pt-3 border-t border-slate-200">
+                                            <button disabled={scanLog.length === 0} onClick={deshacerUltimoEscaneo} className="flex-1 bg-slate-100 disabled:opacity-40 text-slate-700 font-bold py-2 px-3 rounded-xl text-xs hover:bg-slate-200">
+                                                <i className="fa-solid fa-rotate-left mr-1"></i> Deshacer Último
+                                            </button>
+                                            <button onClick={reiniciarInventarioSede} className="bg-red-50 text-red-600 font-bold py-2 px-3 rounded-xl text-xs hover:bg-red-100 border border-red-200">
+                                                <i className="fa-solid fa-broom mr-1"></i> Reiniciar Arqueo
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="lg:col-span-7 glass-card p-5 rounded-2xl flex flex-col h-[720px]">
+                                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-4 border-b pb-3">
+                                        <div>
+                                            <h3 className="font-bold text-slate-800 text-base">
+                                                <i className="fa-solid fa-tower-broadcast text-[#59B447] mr-2"></i>
+                                                Tabla de Inventario en Vivo Multicajero ({sedeActual})
+                                            </h3>
+                                            <p className="text-[11px] text-slate-500">Se actualiza sola cada 3 segundos entre los cajeros conectados a la sede.</p>
+                                        </div>
+                                        <div className="flex gap-1.5">
+                                            <span className="bg-green-100 text-green-800 text-[11px] font-black px-3 py-1 rounded-lg">
+                                                Registrados: {totalContabilizadosHoy}
+                                            </span>
+                                            <span className="bg-amber-100 text-amber-800 text-[11px] font-black px-3 py-1 rounded-lg">
+                                                Faltan: {expedientes.length - totalContabilizadosHoy}
+                                            </span>
+                                        </div>
+                                    </div>
+
+                                    <div className="overflow-x-auto overflow-y-auto flex-1 border border-slate-200 rounded-xl">
+                                        <table className="w-full text-sm text-left">
+                                            <thead className="bg-slate-100 text-slate-600 text-[10px] uppercase font-bold sticky top-0 z-10 shadow-sm">
+                                                <tr>
+                                                    <th className="p-3">Expediente / Cliente</th>
+                                                    <th className="p-3">Estado Inventario</th>
+                                                    <th className="p-3">Ubicación Física</th>
+                                                    <th className="p-3">Estado / Titular</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {expedientes.map(e => {
+                                                    const yaRegistrado = e.invSesion === hoySesionId && e.invFecha;
+                                                    return (
+                                                        <tr key={e.id} className={`border-b transition-colors ${yaRegistrado ? 'bg-green-50/60' : 'hover:bg-slate-50'}`}>
+                                                            <td className="p-3">
+                                                                <p className="font-bold text-slate-800 text-xs">{e.cliente}</p>
+                                                                <p className="text-[11px] text-blue-600 font-black">ID: {e.id}</p>
+                                                            </td>
+                                                            <td className="p-3">
+                                                                {yaRegistrado ? (
+                                                                    <div>
+                                                                        <span className="inline-flex items-center gap-1 bg-green-600 text-white text-[10px] font-black px-2.5 py-1 rounded-full shadow-sm">
+                                                                            <i className="fa-solid fa-check-double"></i> INVENTARIO REGISTRADO
+                                                                        </span>
+                                                                        <p className="text-[10px] text-slate-500 font-bold mt-1">
+                                                                            Por: {e.invCajero} ({e.invFecha})
+                                                                        </p>
+                                                                    </div>
+                                                                ) : (
+                                                                    <span className="inline-flex items-center gap-1 bg-slate-200 text-slate-600 text-[10px] font-bold px-2.5 py-1 rounded-full">
+                                                                        <i className="fa-regular fa-clock"></i> PENDIENTE
+                                                                    </span>
+                                                                )}
+                                                            </td>
+                                                            <td className="p-3">
+                                                                <p className={`text-[11px] font-bold ${e.ubicacionFisica.includes('CAJA') ? 'text-green-600' : 'text-red-500'}`}>
+                                                                    {e.ubicacionFisica}
+                                                                </p>
+                                                                <p className="text-[9px] text-slate-400">{e.fechaUltimoMov}</p>
+                                                            </td>
+                                                            <td className="p-3">
+                                                                <BadgeEstado estado={e.estadoCredito} />
+                                                                <p className="text-[10px] font-semibold text-slate-500 mt-1">{e.asesorTitular}</p>
+                                                            </td>
+                                                        </tr>
+                                                    );
+                                                })}
+                                                {expedientes.length === 0 && <tr><td colSpan="4" className="text-center p-8 text-slate-400">Sin expedientes registrados en esta sede.</td></tr>}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* ===================================================================== */}
+                        {/* 2. PRESTAR / DEVOLVER MANUAL (SOLO CAJEROS Y GERENTES)                */}
+                        {/* ===================================================================== */}
+                        {view === 'movimientos' && puedeOperarCaja && (
+                            <div className="max-w-2xl mx-auto animate-fade-in no-print">
+                                <h2 className="text-xl font-bold text-slate-800 mb-4">Registro Manual de Salidas y Retornos</h2>
+                                <div className="glass-card p-6 rounded-2xl mb-6 border-l-4 border-blue-500 relative z-20">
+                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Buscar Cliente (Nombre o N° Exp)</label>
+                                    <div className="relative">
+                                        <input type="text" value={movBusqueda} onChange={handleLiveSearch} className="w-full p-3 border border-blue-200 rounded-xl outline-none font-bold bg-white text-blue-900 shadow-inner focus:ring-2 focus:ring-blue-400" placeholder="Ej: CARLOS o 45..." />
+                                        {sugerencias.length > 0 && (
+                                            <div className="absolute top-full left-0 right-0 mt-2 bg-white border border-slate-200 rounded-xl shadow-2xl overflow-hidden z-30">
+                                                {sugerencias.map(s => (
+                                                    <div key={s.id} onClick={() => seleccionarExpediente(s)} className="p-3 border-b border-slate-50 hover:bg-blue-50 cursor-pointer flex justify-between items-center transition-colors">
+                                                        <div><p className="font-bold text-sm text-slate-800">{s.cliente}</p><p className="text-[10px] text-slate-500">EXP: <span className="text-blue-600 font-bold">{s.id}</span> | Titular: {s.asesorTitular}</p></div>
+                                                        <i className="fa-solid fa-chevron-right text-slate-300"></i>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+
+                                {expEncontrado && (
+                                    <div className="glass-card p-6 rounded-2xl border-l-4 border-[#59B447] animate-fade-in z-10">
+                                        <div className="mb-4 pb-4 border-b border-slate-100 flex justify-between items-start">
+                                            <div>
+                                                <p className="text-xs text-slate-400 font-bold uppercase">Expediente N°: <span className="text-slate-800 text-base">{expEncontrado.id}</span></p>
+                                                <p className="text-xl font-bold text-slate-800 uppercase mt-1">{expEncontrado.cliente}</p>
+                                                <div className="flex gap-2 mt-2 items-center flex-wrap">
+                                                    <BadgeEstado estado={expEncontrado.estadoCredito} />
+                                                    <span className="px-2 py-1 rounded text-[10px] font-bold bg-slate-100 text-slate-600"><i className="fa-solid fa-user-tie"></i> Titular: {expEncontrado.asesorTitular}</span>
+                                                    <button onClick={()=>setHistorialVisible(expEncontrado)} className="text-[10px] bg-blue-50 text-blue-600 px-2 py-1 rounded font-bold hover:bg-blue-100"><i className="fa-solid fa-clock-rotate-left"></i> Historial</button>
+                                                </div>
+                                            </div>
+                                            <div className="text-right">
+                                                <p className="text-[10px] font-bold text-slate-400 uppercase">Ubicación Física:</p>
+                                                <p className={`font-bold text-sm mt-1 ${expEncontrado.ubicacionFisica.includes('CAJA') ? 'text-green-600' : 'text-red-500'}`}>
+                                                    <i className={`fa-solid ${expEncontrado.ubicacionFisica.includes('CAJA') ? 'fa-box-archive' : 'fa-handshake'}`}></i> {expEncontrado.ubicacionFisica}
+                                                </p>
+                                            </div>
+                                        </div>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                            {expEncontrado.ubicacionFisica.includes('CAJA') ? (
+                                                <div className="bg-orange-50 p-4 rounded-xl border border-orange-100">
+                                                    <p className="text-xs font-bold text-orange-800 mb-2">Prestar físico a Asesor:</p>
+                                                    <select id="selectAsesorPrestamo" className="w-full p-2 border rounded-lg mb-3 bg-white text-sm font-semibold text-slate-700">
+                                                        <option value="">-- Seleccionar Asesor --</option>
+                                                        {asesores.map(a => <option key={a} value={a}>{a}</option>)}
+                                                    </select>
+                                                    <button onClick={() => prestarExpediente(document.getElementById('selectAsesorPrestamo').value)} className="w-full bg-orange-500 text-white py-2 rounded-lg font-bold text-sm shadow hover:bg-orange-600"><i className="fa-solid fa-arrow-right-from-bracket"></i> Registrar Salida</button>
+                                                </div>
+                                            ) : (
+                                                <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-100">
+                                                    <p className="text-xs font-bold text-emerald-800 mb-2">El expediente retorna a archivo:</p>
+                                                    <button onClick={() => devolverCaja('CAJA (ARCHIVO)')} className="w-full bg-emerald-600 text-white py-2 rounded-lg font-bold text-sm shadow hover:bg-emerald-700 mt-4"><i className="fa-solid fa-arrow-right-to-bracket"></i> Retornar a Caja Central</button>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {/* ===================================================================== */}
+                        {/* 3. BUSCADOR Y FILTROS DE SEDE (ADMIN: SOLO LECTURA | GERENTE: EXPORTA)*/}
+                        {/* ===================================================================== */}
+                        {view === 'dashboard' && (
+                            <div className="animate-fade-in space-y-6 no-print">
+                                {esAdmin && (
+                                    <div className="bg-amber-50 border-l-4 border-amber-500 p-4 rounded-xl flex items-center justify-between">
+                                        <div>
+                                            <p className="text-xs font-black text-amber-900 uppercase"><i className="fa-solid fa-eye mr-1"></i> Modo Consulta Administrativa — Sede {sedeActual}</p>
+                                            <p className="text-[11px] text-amber-800">Puedes buscar expedientes por número o nombre y filtrarlos por asesor o estado crediticio. La edición y exportación están reservadas para Gerencia.</p>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Panel de Búsqueda Directa y Filtros Combinados */}
+                                <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-3">
+                                    <div className="flex flex-col lg:flex-row gap-3 items-center">
+                                        {/* Buscador directo por N° Expediente o Nombre */}
+                                        <div className="relative flex-1 w-full">
+                                            <i className="fa-solid fa-magnifying-glass absolute left-3.5 top-3 text-slate-400"></i>
+                                            <input
+                                                type="text"
+                                                value={dashSearchQuery}
+                                                onChange={e => setDashSearchQuery(e.target.value)}
+                                                placeholder={`Buscar en ${sedeActual} por N° de Expediente (ej. 124) o Nombre del Cliente...`}
+                                                className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#59B447]"
+                                            />
+                                        </div>
+
+                                        {/* Botones de Exportación de Filtros: SOLO VISIBLES PARA GERENTES */}
+                                        {puedeExportar && (
+                                            <div className="flex gap-2 w-full lg:w-auto">
+                                                <button onClick={() => exportarCSV(true)} className="bg-emerald-600 text-white px-4 py-2.5 rounded-xl font-bold text-xs shadow hover:bg-emerald-700 flex-1 lg:flex-none flex items-center justify-center gap-1.5">
+                                                    <i className="fa-solid fa-file-excel"></i> Exportar Filtro CSV
+                                                </button>
+                                                <button onClick={() => setModalReporte(true)} className="bg-blue-600 text-white px-4 py-2.5 rounded-xl font-bold text-xs shadow hover:bg-blue-700 flex-1 lg:flex-none flex items-center justify-center gap-1.5">
+                                                    <i className="fa-solid fa-file-pdf"></i> Exportar PDF
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                                        <div className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-xl border border-slate-200">
+                                            <i className="fa-solid fa-user-tie text-slate-400 text-xs"></i>
+                                            <select value={dashFilterAsesor} onChange={e=>setDashFilterAsesor(e.target.value)} className="text-xs font-bold text-slate-700 outline-none bg-transparent w-full">
+                                                <option value="TODOS">ASESOR: TODOS</option>
+                                                {asesores.map(a => <option key={a} value={a}>{a}</option>)}
+                                            </select>
+                                        </div>
+                                        <div className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-xl border border-slate-200">
+                                            <i className="fa-solid fa-tag text-slate-400 text-xs"></i>
+                                            <select value={dashFilterEstado} onChange={e=>setDashFilterEstado(e.target.value)} className="text-xs font-bold text-slate-700 outline-none bg-transparent w-full">
+                                                <option value="TODOS">ESTADO: TODOS</option>
+                                                {estadosDisponibles.map(est => <option key={est} value={est}>{est}</option>)}
+                                            </select>
+                                        </div>
+                                        <div className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-xl border border-slate-200">
+                                            <i className="fa-solid fa-box-archive text-slate-400 text-xs"></i>
+                                            <select value={dashFiltroUbicacion} onChange={e=>setDashFiltroUbicacion(e.target.value)} className="text-xs font-bold text-slate-700 outline-none bg-transparent w-full">
+                                                <option value="TODOS">UBICACIÓN: TODAS</option>
+                                                <option value="CAJA">RESGUARDADOS EN CAJA</option>
+                                                <option value="CAMPO">PRESTADOS / FUERA DE CAJA</option>
+                                            </select>
+                                        </div>
+                                        <div className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-xl border border-slate-200">
+                                            <i className="fa-solid fa-qrcode text-slate-400 text-xs"></i>
+                                            <select value={dashFiltroInv} onChange={e=>setDashFiltroInv(e.target.value)} className="text-xs font-bold text-slate-700 outline-none bg-transparent w-full">
+                                                <option value="TODOS">INVENTARIO: TODOS</option>
+                                                <option value="CONTABILIZADO">INVENTARIO REGISTRADO HOY</option>
+                                                <option value="FALTANTE">PENDIENTES DE ESCANEAR</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                                    <div className="bg-white p-5 rounded-2xl shadow-sm border-l-4 border-blue-500">
+                                        <p className="text-xs text-slate-500 font-bold uppercase">Expedientes Filtrados</p>
+                                        <p className="text-3xl font-bold text-slate-800">{listaDash.length}</p>
+                                    </div>
+                                    <div className="bg-white p-5 rounded-2xl shadow-sm border-l-4 border-[#59B447]">
+                                        <p className="text-xs text-slate-500 font-bold uppercase">En Caja (Archivo)</p>
+                                        <p className="text-3xl font-bold text-green-600">{listaDash.filter(e => e.ubicacionFisica.includes('CAJA')).length}</p>
+                                    </div>
+                                    <div className="bg-red-50 p-5 rounded-2xl shadow-sm border-l-4 border-red-500">
+                                        <p className="text-xs text-red-500 font-bold uppercase">Prestados a Asesor</p>
+                                        <p className="text-3xl font-bold text-red-600">{listaDash.filter(e => !e.ubicacionFisica.includes('CAJA')).length}</p>
+                                    </div>
+                                    <div className="bg-emerald-50 p-5 rounded-2xl shadow-sm border-l-4 border-emerald-600">
+                                        <p className="text-xs text-emerald-700 font-bold uppercase">Inventario QR Hoy</p>
+                                        <p className="text-3xl font-bold text-emerald-700">{listaDash.filter(e => e.invSesion === hoySesionId && e.invFecha).length}</p>
+                                    </div>
+                                </div>
+
+                                <div className="glass-card rounded-2xl p-6">
+                                    <h3 className="font-bold text-slate-800 mb-4 border-b pb-2">
+                                        <i className="fa-solid fa-table-list text-blue-500 mr-1"></i>
+                                        Resultados en Sede {sedeActual} ({listaDash.length})
+                                    </h3>
+                                    <div className="overflow-x-auto border border-slate-200 rounded-xl max-h-[520px]">
+                                        <table className="w-full text-sm text-left whitespace-nowrap">
+                                            <thead className="bg-slate-50 text-slate-600 text-[10px] uppercase font-bold sticky top-0 shadow-sm">
+                                                <tr>
+                                                    <th className="p-3">N° Expediente</th>
+                                                    <th className="p-3">Nombre del Cliente</th>
+                                                    <th className="p-3">Estado / Categoría</th>
+                                                    <th className="p-3">Asesor Titular</th>
+                                                    <th className="p-3">Ubicación Física</th>
+                                                    <th className="p-3">Inventario QR Hoy</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {listaDash.map(e => (
+                                                    <tr key={e.id} className="border-b hover:bg-slate-50">
+                                                        <td className="p-3 font-black text-blue-600 text-xs">{e.id}</td>
+                                                        <td className="p-3 font-bold text-slate-800 text-xs">{e.cliente}</td>
+                                                        <td className="p-3">
+                                                            <BadgeEstado estado={e.estadoCredito} />
+                                                            {e.categoriaExtra && <span className="ml-1.5 text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded font-bold">{e.categoriaExtra}</span>}
+                                                        </td>
+                                                        <td className="p-3 text-xs font-bold text-slate-600">{e.asesorTitular}</td>
+                                                        <td className="p-3 font-bold text-xs">
+                                                            <span className={e.ubicacionFisica.includes('CAJA') ? 'text-green-600' : 'text-red-500'}>{e.ubicacionFisica}</span>
+                                                            <p className="text-[9px] text-slate-400 font-normal">{e.fechaUltimoMov}</p>
+                                                        </td>
+                                                        <td className="p-3">
+                                                            {(e.invSesion === hoySesionId && e.invFecha) ? (
+                                                                <span className="bg-green-100 text-green-800 text-[10px] font-black px-2.5 py-1 rounded-full">
+                                                                    ✔ REGISTRADO ({e.invCajero})
+                                                                </span>
+                                                            ) : (
+                                                                <span className="bg-slate-100 text-slate-500 text-[10px] font-bold px-2.5 py-1 rounded-full">
+                                                                    PENDIENTE
+                                                                </span>
+                                                            )}
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                                {listaDash.length === 0 && <tr><td colSpan="6" className="text-center p-8 text-slate-400 font-medium">No se encontraron expedientes con esos criterios.</td></tr>}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* ===================================================================== */}
+                        {/* 4. REGISTRO DE EXPEDIENTES (CAJERO) Y EDICIÓN TOTAL (GERENTE)         */}
+                        {/* ===================================================================== */}
+                        {view === 'inventario' && puedeOperarCaja && (
+                            <div className="grid grid-cols-1 xl:grid-cols-4 gap-6 animate-fade-in no-print">
+                                <div className="xl:col-span-1 space-y-6">
+                                    <div className="glass-card p-5 rounded-2xl h-fit border-t-4 border-[#59B447]">
+                                        <h3 className="font-bold text-slate-800 mb-4 border-b pb-2">Registrar Nuevo Expediente</h3>
+                                        <form onSubmit={registrarExpediente} className="space-y-3">
+                                            <div><label className="text-[10px] font-bold text-slate-500 uppercase">N° Expediente</label><input type="text" required value={formInv.idExp} onChange={e=>setFormInv({...formInv, idExp: e.target.value.replace(/\D/g, '')})} placeholder="Ej. 125" className="w-full p-2 border rounded bg-white text-sm font-bold shadow-inner focus:ring-2 focus:ring-[#59B447] outline-none" /></div>
+                                            <div><label className="text-[10px] font-bold text-slate-500 uppercase">Nombre del Cliente</label><input type="text" required value={formInv.cliente} onChange={e=>setFormInv({...formInv, cliente: e.target.value})} className="w-full p-2 border rounded bg-white text-sm uppercase" /></div>
+                                            <div>
+                                                <label className="text-[10px] font-bold text-slate-500 uppercase">Estado / Categorización</label>
+                                                <select value={formInv.estadoCredito} onChange={e=>setFormInv({...formInv, estadoCredito: e.target.value})} className="w-full p-2 border rounded bg-white text-sm font-semibold text-slate-700">
+                                                    {estadosDisponibles.map(est => <option key={est} value={est}>{est}</option>)}
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="text-[10px] font-bold text-slate-500 uppercase">Asesor Titular</label>
+                                                <select value={formInv.asesorTitular} onChange={e=>setFormInv({...formInv, asesorTitular: e.target.value})} className="w-full p-2 border rounded bg-white text-sm">
+                                                    <option value="">Selecciona...</option>
+                                                    {asesores.map(a => <option key={a} value={a}>{a}</option>)}
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="text-[10px] font-bold text-slate-500 uppercase">Subcategoría / Observación (Opcional)</label>
+                                                <input type="text" value={formInv.categoriaExtra} onChange={e=>setFormInv({...formInv, categoriaExtra: e.target.value})} placeholder="Ej. PYME / PRENDARIO" className="w-full p-2 border rounded bg-white text-xs uppercase" />
+                                            </div>
+                                            <div className="flex items-center gap-2 mt-4 bg-slate-50 p-2 rounded border border-slate-200">
+                                                <input type="checkbox" id="chkTicket" checked={formInv.generarTicket} onChange={e => setFormInv({...formInv, generarTicket: e.target.checked})} className="w-4 h-4 text-[#59B447] focus:ring-[#59B447]" />
+                                                <label htmlFor="chkTicket" className="text-[10px] font-bold text-slate-600 cursor-pointer">Añadir Ticket QR a cola de impresión</label>
+                                            </div>
+                                            <button type="submit" className="w-full bg-[#59B447] text-white py-2.5 rounded-lg font-bold shadow hover:bg-green-600 mt-2">Registrar en {sedeActual}</button>
+                                        </form>
+                                    </div>
+
+                                    {esGerente && (
+                                        <div className="bg-orange-50 border border-orange-200 p-5 rounded-2xl shadow-sm">
+                                            <h3 className="font-bold text-orange-800 mb-2"><i className="fa-solid fa-cloud-arrow-up"></i> Carga Masiva CSV (Gerencia)</h3>
+                                            <p className="text-[10px] text-orange-700 mb-3">Importa lotes de expedientes en formato CSV directamente a la filial {sedeActual}.</p>
+                                            <button onClick={() => csvInputRef.current.click()} className="w-full bg-orange-500 text-white py-2 rounded-lg font-bold shadow hover:bg-orange-600 text-xs">Seleccionar Archivo CSV</button>
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="xl:col-span-3 glass-card p-6 rounded-2xl h-[800px] flex flex-col">
+                                    <div className="flex justify-between items-center mb-4 border-b pb-2">
+                                        <h3 className="font-bold text-slate-800">Base de Expedientes — {sedeActual} ({expedientes.length})</h3>
+                                        {!esGerente && <span className="text-[10px] bg-slate-100 text-slate-500 px-2.5 py-1 rounded font-bold">La edición de expedientes creados requiere perfil Gerencial</span>}
+                                    </div>
+                                    <div className="overflow-x-auto overflow-y-auto flex-1 border border-slate-200 rounded-xl">
+                                        <table className="w-full text-sm text-left">
+                                            <thead className="bg-slate-100 text-slate-600 text-[10px] uppercase font-bold sticky top-0 z-10 shadow-sm">
+                                                <tr><th className="p-3">N° Exp / Cliente</th><th className="p-3">Categorización / Titular</th><th className="p-3">Ubicación Física</th><th className="p-3">Acciones</th></tr>
+                                            </thead>
+                                            <tbody>
+                                                {expedientes.map(e => {
+                                                    const isEditing = puedeEditarBase && editMode && editMode.id === e.id;
+                                                    return (
+                                                    <tr key={e.id} className="border-b hover:bg-slate-50">
+                                                        <td className="p-3">
+                                                            {isEditing ? (
+                                                                <input type="text" value={editMode.nuevoCliente} onChange={evt => setEditMode({...editMode, nuevoCliente: evt.target.value.toUpperCase()})} className="border p-1.5 rounded text-xs font-bold w-full uppercase mb-1" />
+                                                            ) : (
+                                                                <p className="font-bold text-slate-800 text-xs">{e.cliente}</p>
+                                                            )}
+                                                            <p className="text-[10px] text-blue-600 font-black">Exp: {e.id}</p>
+                                                        </td>
+                                                        <td className="p-3">
+                                                            {isEditing ? (
+                                                                <div className="space-y-1">
+                                                                    <select value={editMode.nuevoEstado} onChange={evt => setEditMode({...editMode, nuevoEstado: evt.target.value})} className="text-[10px] border p-1 rounded w-full font-bold">
+                                                                        {estadosDisponibles.map(est => <option key={est} value={est}>{est}</option>)}
+                                                                    </select>
+                                                                    <select value={editMode.nuevoAsesor} onChange={evt => setEditMode({...editMode, nuevoAsesor: evt.target.value})} className="text-[10px] border p-1 rounded w-full">
+                                                                        {asesores.map(a => <option key={a} value={a}>{a}</option>)}
+                                                                    </select>
+                                                                    <input type="text" value={editMode.nuevaCatExtra} onChange={evt => setEditMode({...editMode, nuevaCatExtra: evt.target.value})} placeholder="Subcategoría..." className="text-[10px] border p-1 rounded w-full uppercase" />
+                                                                </div>
+                                                            ) : (
+                                                                <>
+                                                                    <BadgeEstado estado={e.estadoCredito} />
+                                                                    {e.categoriaExtra && <span className="ml-1 text-[9px] bg-slate-200 px-1.5 py-0.5 rounded font-bold">{e.categoriaExtra}</span>}
+                                                                    <p className="text-[10px] font-semibold mt-1 text-slate-600">Titular: {e.asesorTitular}</p>
+                                                                </>
+                                                            )}
+                                                        </td>
+                                                        <td className="p-3">
+                                                            {isEditing ? (
+                                                                <select value={editMode.nuevaUbicacion} onChange={evt => setEditMode({...editMode, nuevaUbicacion: evt.target.value})} className="text-[10px] border p-1 rounded w-full font-bold">
+                                                                    {ubicacionesDisponibles.map(ub => <option key={ub} value={ub}>{ub}</option>)}
+                                                                    {asesores.map(a => <option key={`as-${a}`} value={`CON ASESOR: ${a}`}>{`CON ASESOR: ${a}`}</option>)}
+                                                                </select>
+                                                            ) : (
+                                                                <>
+                                                                    <p className={`text-[10px] font-bold ${e.ubicacionFisica.includes('CAJA') ? 'text-green-600' : 'text-red-500'}`}>{e.ubicacionFisica}</p>
+                                                                    <p className="text-[9px] text-slate-400 mt-1">{e.fechaUltimoMov}</p>
+                                                                </>
+                                                            )}
+                                                        </td>
+                                                        <td className="p-3">
+                                                            {isEditing ? (
+                                                                <div className="flex gap-1 flex-col sm:flex-row">
+                                                                    <button onClick={() => guardarEdicionGerencial(e)} className="bg-[#59B447] text-white px-2.5 py-1 rounded text-[10px] font-bold">Guardar</button>
+                                                                    <button onClick={() => setEditMode(null)} className="bg-slate-300 text-slate-700 px-2.5 py-1 rounded text-[10px] font-bold">Cancelar</button>
+                                                                </div>
+                                                            ) : (
+                                                                <div className="flex gap-1 flex-col">
+                                                                    {puedeEditarBase && (
+                                                                        <button onClick={() => setEditMode({
+                                                                            id: e.id,
+                                                                            nuevoCliente: e.cliente,
+                                                                            nuevoEstado: e.estadoCredito,
+                                                                            nuevoAsesor: e.asesorTitular,
+                                                                            nuevaUbicacion: e.ubicacionFisica,
+                                                                            nuevaCatExtra: e.categoriaExtra || ''
+                                                                        })} className="bg-slate-100 text-slate-700 border border-slate-300 px-2 py-1 rounded text-[10px] font-bold hover:bg-slate-200">
+                                                                            <i className="fa-solid fa-pen"></i> Editar
+                                                                        </button>
+                                                                    )}
+                                                                    <button onClick={() => setHistorialVisible(e)} className="bg-blue-50 text-blue-700 border border-blue-200 px-2 py-1 rounded text-[10px] font-bold hover:bg-blue-100">
+                                                                        <i className="fa-solid fa-clock-rotate-left"></i> Historial
+                                                                    </button>
+                                                                </div>
+                                                            )}
+                                                        </td>
+                                                    </tr>
+                                                )})}
+                                                {expedientes.length === 0 && <tr><td colSpan="4" className="text-center p-8 text-slate-400">Sin datos.</td></tr>}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* ===================================================================== */}
+                        {/* 5. GENERADOR MASIVO DE TICKETS QR FÍSICOS A4 (CAJEROS Y GERENTES)     */}
+                        {/* ===================================================================== */}
+                        {view === 'tickets' && puedeOperarCaja && (
+                            <div className="animate-fade-in">
+                                <div className="no-print grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
+                                    <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
+                                        <h3 className="font-bold text-slate-800 text-sm mb-2"><i className="fa-solid fa-database text-[#59B447] mr-1"></i> 1. Generar Cientos desde Base ({expedientes.length})</h3>
+                                        <div className="flex gap-2 mb-2">
+                                            <input type="text" placeholder="Desde Exp (Ej. 1)" value={rangoDesde} onChange={e=>setRangoDesde(e.target.value)} className="w-1/2 p-2 border rounded-lg text-xs font-bold" />
+                                            <input type="text" placeholder="Hasta Exp (Ej. 300)" value={rangoHasta} onChange={e=>setRangoHasta(e.target.value)} className="w-1/2 p-2 border rounded-lg text-xs font-bold" />
+                                        </div>
+                                        <div className="flex gap-2">
+                                            <button onClick={() => cargarTicketsDesdeBase(true)} className="flex-1 bg-slate-800 text-white py-2 rounded-lg text-xs font-bold hover:bg-slate-700">Cargar Rango</button>
+                                            <button onClick={() => cargarTicketsDesdeBase(false)} className="flex-1 bg-[#59B447] text-white py-2 rounded-lg text-xs font-bold hover:bg-green-600">Cargar Todos ({expedientes.length})</button>
+                                        </div>
+                                    </div>
+
+                                    <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
+                                        <h3 className="font-bold text-slate-800 text-sm mb-2"><i className="fa-solid fa-file-excel text-emerald-600 mr-1"></i> 2. Pegado Masivo desde Excel</h3>
+                                        <textarea rows="2" value={excelPasteText} onChange={e=>setExcelPasteText(e.target.value)} placeholder="Pega aquí las columnas N° Exp y Nombre desde Excel..." className="w-full p-2 border rounded-lg text-xs font-mono mb-2"></textarea>
+                                        <button onClick={procesarPegadoMasivoExcel} className="w-full bg-emerald-600 text-white py-2 rounded-lg text-xs font-bold hover:bg-emerald-700">Generar Lote QR</button>
+                                    </div>
+
+                                    <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
+                                        <h3 className="font-bold text-slate-800 text-sm mb-2"><i className="fa-solid fa-keyboard text-blue-500 mr-1"></i> 3. Ticket Individual (Reimpresión)</h3>
+                                        <form onSubmit={agregarTicketManual} className="space-y-2">
+                                            <div className="flex gap-2">
+                                                <input type="text" placeholder="N° Exp (124)" value={manualId} onChange={e=>setManualId(e.target.value.replace(/\D/g, ''))} className="w-1/3 p-2 border rounded-lg text-xs font-bold" required />
+                                                <input type="text" placeholder="Nombre Cliente" value={manualCliente} onChange={e=>setManualCliente(e.target.value.toUpperCase())} className="w-2/3 p-2 border rounded-lg text-xs font-bold" required />
+                                            </div>
+                                            <button type="submit" className="w-full bg-blue-600 text-white py-2 rounded-lg font-bold text-xs hover:bg-blue-700"><i className="fa-solid fa-plus"></i> Añadir a Cola</button>
+                                        </form>
+                                    </div>
+                                </div>
+
+                                <div className="no-print mb-4 flex flex-col md:flex-row justify-between items-start md:items-center bg-white p-4 rounded-xl shadow-sm border border-slate-200 gap-4">
+                                    <div><h2 className="text-xl font-bold text-slate-800"><i className="fa-solid fa-print text-[#59B447]"></i> Vista Previa (A4 - 4x6 con QR)</h2><p className="text-sm text-slate-500">Etiquetas en cola: <span className="font-bold text-blue-600">{ticketsQueue.length}</span></p></div>
+                                    <div className="flex gap-2 w-full md:w-auto">
+                                        <button onClick={() => { if(confirm("¿Vaciar todas las etiquetas en cola?")) setTicketsQueue([]); }} className="bg-red-50 text-red-600 px-4 py-2.5 rounded-lg font-bold hover:bg-red-100 flex-1 sm:flex-none text-sm">Vaciar Todo</button>
+                                        <button onClick={() => window.print()} className="bg-slate-800 text-white px-6 py-2.5 rounded-lg font-bold shadow-md hover:bg-slate-700 flex-1 sm:flex-none text-sm">Imprimir A4 Ahora</button>
+                                    </div>
+                                </div>
+
+                                <div className="print-container w-full flex flex-col items-center">
+                                    {printPages.map((page, pageIdx) => (
+                                        <div key={pageIdx} className="print-area bg-white mx-auto w-full mb-8" style={{ pageBreakAfter: pageIdx === printPages.length - 1 ? 'auto' : 'always' }}>
+                                            <div className="grid grid-cols-4 w-full border-t-2 border-l-2 border-black">
+                                                {page.map((t, idx) => {
+                                                    if (t.isEmpty) return ( <div key={`empty-${idx}`} className="ticket-cell flex flex-col border-r-2 border-b-2 border-black bg-white box-border" style={{ height: '40mm' }}><div className="w-full bg-white border-b-2 border-black shrink-0" style={{ height: '4.5mm' }}></div><div className="flex-1 w-full bg-transparent"></div><div className="w-full bg-slate-50/30 border-t-2 border-black shrink-0" style={{ height: '14.5mm' }}></div></div> );
+                                                    const nombres = parseTicketName(t.cliente);
+                                                    const qrValue = `${t.sede || sedeActual}|${t.id}|${t.cliente}`;
+                                                    return (
+                                                    <div key={idx} className="ticket-cell flex flex-col border-r-2 border-b-2 border-black bg-white box-border overflow-hidden justify-between" style={{ height: '40mm' }}>
+                                                        <div className="w-full bg-white border-b-2 border-black shrink-0 flex items-center justify-between px-1.5" style={{ height: '4.5mm' }}>
+                                                            <span className="text-[8px] font-black text-slate-700">{t.sede || sedeActual}</span>
+                                                            <span className="text-[8px] font-bold text-slate-400">CREDIBAN</span>
+                                                        </div>
+                                                        <div className="flex-1 w-full flex items-center justify-between px-1.5 py-0.5 overflow-hidden gap-1">
+                                                            <div className="flex-1 flex flex-col items-center justify-center overflow-hidden">
+                                                                <span className={`font-black text-black uppercase text-center w-full leading-[1.05] break-words whitespace-normal ${getTicketNameStyle(t.cliente)}`} style={{ fontFamily: 'Arial, sans-serif' }}>{nombres.part1}</span>
+                                                                {nombres.part2 && ( <span className={`font-extrabold text-black uppercase text-center w-full leading-[1.05] break-words whitespace-normal ${getTicketNameStyle(t.cliente)}`} style={{ fontFamily: 'Arial, sans-serif' }}>{nombres.part2}</span> )}
+                                                            </div>
+                                                            <div className="shrink-0 flex items-center justify-center p-0.5 bg-white">
+                                                                <QRCodeCanvas value={qrValue} size={54} />
+                                                            </div>
+                                                        </div>
+                                                        <div className="w-full flex items-center justify-center bg-white border-t-2 border-black pb-0.5 shrink-0" style={{ height: '13.5mm' }}>
+                                                            <span className="font-black text-[26px] text-red-600 tracking-tighter font-sans" style={{ lineHeight: '1', textShadow: '0px 0px 0px #dc2626' }}>{t.id}</span>
+                                                        </div>
+                                                    </div>
+                                                )})}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* ===================================================================== */}
+                        {/* 6. PANEL GERENCIAL DE PARÁMETROS, CATEGORÍAS Y SYNC DE USUARIOS       */}
+                        {/* ===================================================================== */}
+                        {view === 'parametros' && esGerente && (
+                            <div className="animate-fade-in max-w-5xl mx-auto space-y-6 no-print">
+                                <div className="bg-slate-900 text-white p-6 rounded-2xl shadow-lg flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                                    <div>
+                                        <h2 className="text-lg font-black text-[#59B447] uppercase"><i className="fa-solid fa-users-rays mr-2"></i> Sincronización con Script Maestro de Usuarios</h2>
+                                        <p className="text-xs text-slate-300 mt-1">Si agregaste una nueva filial, cajero, administrador o asesor en el Script de Usuarios, sincronízalo aquí en un clic.</p>
+                                    </div>
+                                    <button onClick={forzarSyncUsuarios} className="bg-[#59B447] text-white font-black px-5 py-3 rounded-xl shadow hover:bg-green-600 text-xs whitespace-nowrap">
+                                        <i className="fa-solid fa-rotate mr-1.5"></i> Sincronizar Usuarios y Sedes Ahora
+                                    </button>
+                                </div>
+
+                                <div className="glass-card p-6 rounded-2xl border-t-4 border-[#59B447]">
+                                    <h3 className="font-bold text-slate-800 mb-3">Añadir Nuevo Parámetro o Categorización al Sistema</h3>
+                                    <form onSubmit={agregarParametroCloud} className="flex flex-col sm:flex-row gap-3">
+                                        <select value={nuevoParamTipo} onChange={e => setNuevoParamTipo(e.target.value)} className="p-3 border rounded-xl bg-slate-50 font-bold text-xs text-slate-700">
+                                            <option value="ASESOR">ASESOR DE LA SEDE ({sedeActual})</option>
+                                            <option value="ESTADO_CREDITO">CATEGORÍA / ESTADO DE CRÉDITO</option>
+                                            <option value="UBICACION">UBICACIÓN FÍSICA / ESTANTE</option>
+                                            <option value="SEDE">NUEVA FILIAL / SEDE</option>
+                                        </select>
+                                        <input type="text" required value={nuevoParamValor} onChange={e => setNuevoParamValor(e.target.value)} placeholder="Escribe el nombre del parámetro..." className="flex-1 p-3 border rounded-xl text-sm font-bold uppercase outline-none focus:ring-2 focus:ring-[#59B447]" />
+                                        <button type="submit" className="bg-slate-800 text-white px-6 py-3 rounded-xl font-bold text-xs hover:bg-slate-700">
+                                            <i className="fa-solid fa-plus mr-1"></i> Guardar en Nube
+                                        </button>
+                                    </form>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                    {/* Lista de Asesores de la Sede */}
+                                    <div className="glass-card p-5 rounded-2xl">
+                                        <h4 className="font-bold text-slate-800 text-sm mb-3 border-b pb-2"><i className="fa-solid fa-user-tie text-[#59B447] mr-1"></i> Asesores ({sedeActual})</h4>
+                                        <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                                            {asesores.map(a => (
+                                                <div key={a} className="flex justify-between items-center p-2.5 bg-white border rounded-xl text-xs font-bold text-slate-700">
+                                                    <span>{a}</span>
+                                                    <button onClick={() => eliminarParametroCloud('ASESOR', a)} className="text-red-500 hover:bg-red-50 px-2 py-1 rounded"><i className="fa-solid fa-trash-can"></i></button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    {/* Categorizaciones / Estados de Crédito */}
+                                    <div className="glass-card p-5 rounded-2xl">
+                                        <h4 className="font-bold text-slate-800 text-sm mb-3 border-b pb-2"><i className="fa-solid fa-tags text-blue-500 mr-1"></i> Categorías de Estado</h4>
+                                        <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                                            {estadosDisponibles.map(est => (
+                                                <div key={est} className="flex justify-between items-center p-2.5 bg-white border rounded-xl text-xs font-bold text-slate-700">
+                                                    <BadgeEstado estado={est} />
+                                                    <button onClick={() => eliminarParametroCloud('ESTADO_CREDITO', est)} className="text-red-500 hover:bg-red-50 px-2 py-1 rounded"><i className="fa-solid fa-trash-can"></i></button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    {/* Filiales / Sedes Activas */}
+                                    <div className="glass-card p-5 rounded-2xl">
+                                        <h4 className="font-bold text-slate-800 text-sm mb-3 border-b pb-2"><i className="fa-solid fa-building text-purple-600 mr-1"></i> Filiales Activas</h4>
+                                        <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                                            {sedesDisponibles.map(s => (
+                                                <div key={s} className="flex justify-between items-center p-2.5 bg-white border rounded-xl text-xs font-bold text-slate-700">
+                                                    <span><i className="fa-solid fa-location-dot text-slate-400 mr-1.5"></i> {s}</span>
+                                                    <span className="text-[10px] bg-green-100 text-green-700 px-2 py-0.5 rounded-full">ACTIVA</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </main>
+                </div>
+            );
+        }
+        
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
