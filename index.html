@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Control de Expedientes & QR - CREDIBAN V20 Cloud</title>
+    <title>Control de Expedientes & QR - CREDIBAN V20.1 Cloud</title>
     
     <!-- Librerías Core -->
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -16,8 +16,8 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
 
-    <!-- Librerías para Escáner QR en Ráfaga y Generador Masivo QR -->
-    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+    <!-- Librerías Estables para Escáner QR por Hardware y Generador QR HD -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js"></script>
     
     <style>
@@ -28,11 +28,18 @@
         ::-webkit-scrollbar { width: 6px; height: 6px; }
         ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-        .animate-fade-in { animation: fadeIn 0.3s ease-out forwards; }
+        .animate-fade-in { animation: fadeIn 0.25s ease-out forwards; }
         .modal-bg { animation: fadeIn 0.2s ease-out forwards; }
         
         .login-bg { background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); position: relative; overflow: hidden; }
         .login-bg::before { content: ''; position: absolute; top: -50%; left: -50%; width: 200%; height: 200%; background: radial-gradient(circle, rgba(89,180,71,0.05) 0%, rgba(0,0,0,0) 70%); }
+
+        /* Asegurar que el video del escáner ocupe bien el contenedor móvil */
+        #qr-reader-box video {
+            width: 100% !important;
+            border-radius: 12px !important;
+            object-fit: cover !important;
+        }
 
         /* IMPRESIÓN EXACTA 4x6 (24 Tickets QR por Hoja A4) */
         @media print {
@@ -61,11 +68,11 @@
         const API_URL = "https://script.google.com/macros/s/AKfycbwHEPrFeiFPsB0z1SsTeO2KKfXoSVcZsjxLbQ_UjREyTEI28edgnZDLGnTB0Z7PqTRs/exec";
 
         // =========================================================================
-        // 2. URL OFICIAL DEL SCRIPT MAESTRO DE USUARIOS (SINCRONIZADO)
+        // 2. URL OFICIAL DEL SCRIPT MAESTRO DE USUARIOS
         // =========================================================================
         const USERS_API_URL = "https://script.google.com/macros/s/AKfycbyPGo-OSC0KZcz03bAMpKQ82cipc2T1LNztaI229FhYqqNNXqG1oSb6hPPgVSSU3piqiw/exec";
 
-        // Sintetizador Nativo de Sonidos en 0 ms (Estilo Caja Plaza Vea)
+        // Sintetizador Nativo de Sonidos en 0 ms (Estilo Caja Supermercado)
         const playSound = (type) => {
             try {
                 const ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -74,7 +81,7 @@
                     const gain = ctx.createGain();
                     osc.type = wave;
                     osc.frequency.setValueAtTime(freq, ctx.currentTime + start);
-                    gain.gain.setValueAtTime(0.25, ctx.currentTime + start);
+                    gain.gain.setValueAtTime(0.28, ctx.currentTime + start);
                     gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + start + duration);
                     osc.connect(gain);
                     gain.connect(ctx.destination);
@@ -94,7 +101,7 @@
             } catch (e) {}
         };
 
-        // Clasificador Estricto de Roles (Solo deja pasar CAJERO, ADMINISTRADOR y GERENTE)
+        // Clasificador Estricto de Roles (Solo permite CAJERO, ADMINISTRADOR y GERENTE)
         const clasificarRolSistema = (cargoRaw) => {
             const c = String(cargoRaw || "")
                 .normalize("NFD")
@@ -102,72 +109,86 @@
                 .toUpperCase()
                 .trim();
 
-            // 1. Bloqueo explícito de Asesores / Trabajadores / Analistas
             if (c.includes("ASESOR") || c.includes("ANALISTA") || c.includes("PROMOTOR") || c === "TRABAJADOR") {
                 return "BLOQUEADO_ASESOR";
             }
-            // 2. Gerente (Control Total + Exportación + Multi-Sede + Parámetros)
             if (c.includes("GERENTE") || c.includes("GERENCIA") || c.includes("DIRECTOR") || c.includes("SUPERADMIN")) {
                 return "GERENTE";
             }
-            // 3. Administrador (Solo Búsqueda y Filtros de su Sede, Sin Exportar ni Editar)
             if (c.includes("ADMIN") || c.includes("SUPERVISOR") || c.includes("JEFE") || c.includes("COORDINADOR")) {
                 return "ADMINISTRADOR";
             }
-            // 4. Cajero (Operaciones de Archivo, Escáner QR, Préstamos, Registro y Tickets)
             if (c.includes("CAJERO") || c.includes("CAJERA") || c.includes("CAJA") || c.includes("ARCHIVO")) {
                 return "CAJERO";
             }
             return "NO_AUTORIZADO";
         };
 
-        // Componente QR para las etiquetas A4
-        function QRCodeCanvas({ value, size = 54 }) {
+        // Generador de Código QR en Alta Definición (3x DPI) con Zona de Silencio Blanca Obligatoria
+        function QRCodeCanvas({ value, size = 84 }) {
             const canvasRef = React.useRef(null);
             React.useEffect(() => {
                 if (canvasRef.current && window.QRious) {
+                    const hdSize = Math.max(240, size * 3); // Renderizado nítido para impresión
                     new window.QRious({
                         element: canvasRef.current,
-                        value: value,
-                        size: size,
-                        level: 'M',
-                        padding: 0
+                        value: value || '001-00000',
+                        size: hdSize,
+                        level: 'L', // Nivel L genera bloques más grandes y fáciles de leer rápido con cámara
+                        background: '#ffffff',
+                        foreground: '#000000',
+                        padding: Math.round(hdSize * 0.08) // Margen blanco interno (Quiet Zone) indispensable para el lector
                     });
                 }
             }, [value, size]);
-            return <canvas ref={canvasRef} style={{ width: `${size}px`, height: `${size}px` }} />;
+            return (
+                <div className="bg-white inline-flex items-center justify-center rounded-sm" style={{ width: `${size}px`, height: `${size}px` }}>
+                    <canvas
+                        ref={canvasRef}
+                        style={{
+                            width: `${size}px`,
+                            height: `${size}px`,
+                            imageRendering: 'pixelated'
+                        }}
+                    />
+                </div>
+            );
         }
 
         function App() {
             // =====================================================================
-            // ESTADOS DE SEGURIDAD, USUARIO Y PARÁMETROS SINCRONIZADOS
+            // ESTADOS DE SEGURIDAD, LOGIN Y RECORDAR CONTRASEÑA
             // =====================================================================
             const [isAuth, setIsAuth] = React.useState(false);
             const [isLoading, setIsLoading] = React.useState(false);
             const [loadingMsg, setLoadingMsg] = React.useState('');
             const [loginErrorMsg, setLoginErrorMsg] = React.useState('');
 
+            const [rememberPass, setRememberPass] = React.useState(() => localStorage.getItem('crediban_v20_remember') !== 'false');
+            const [showPassLogin, setShowPassLogin] = React.useState(false);
+            const [usuarioInput, setUsuarioInput] = React.useState(() => localStorage.getItem('crediban_v20_user') || '');
+            const [passwordInput, setPasswordInput] = React.useState(() => {
+                return localStorage.getItem('crediban_v20_remember') !== 'false'
+                    ? (localStorage.getItem('crediban_v20_pass') || '')
+                    : '';
+            });
+
             const [sedesDisponibles, setSedesDisponibles] = React.useState(["HUACHO", "HUARAZ", "ICA", "HUANUCO"]);
             const [estadosDisponibles, setEstadosDisponibles] = React.useState(["ACTIVO", "MORA DURA", "CANCELADO", "LISTA NEGRA", "JUDICIAL", "REPROGRAMADO"]);
             const [ubicacionesDisponibles, setUbicacionesDisponibles] = React.useState(["CAJA (ARCHIVO)", "EN COMITÉ", "AUDITORÍA", "ARCHIVO CENTRAL"]);
 
             const [sedeActual, setSedeActual] = React.useState(() => localStorage.getItem('crediban_v20_sede') || 'HUACHO');
-            const [usuarioInput, setUsuarioInput] = React.useState(() => localStorage.getItem('crediban_v20_user') || '');
-            const [passwordInput, setPasswordInput] = React.useState('');
-
-            // Datos del usuario autenticado
             const [operadorNombre, setOperadorNombre] = React.useState('');
             const [rolSistema, setRolSistema] = React.useState(''); // 'CAJERO' | 'ADMINISTRADOR' | 'GERENTE'
-            const [cargoOriginal, setCargoOriginal] = React.useState('');
             const [sedesPermitidas, setSedesPermitidas] = React.useState([]);
 
-            // Permisos derivados del rol
+            // Permisos según el Rol
             const esGerente = rolSistema === 'GERENTE';
             const esAdmin = rolSistema === 'ADMINISTRADOR';
             const esCajero = rolSistema === 'CAJERO';
-            const puedeOperarCaja = esCajero || esGerente; // Cajeros y Gerentes pueden usar escáner, prestar, registrar y tickets
-            const puedeExportar = esGerente;               // Solo Gerentes pueden exportar CSV y PDF
-            const puedeEditarBase = esGerente;             // Solo Gerentes pueden editar expedientes y parámetros
+            const puedeOperarCaja = esCajero || esGerente;
+            const puedeExportar = esGerente;
+            const puedeEditarBase = esGerente;
 
             // ESTADOS DE NAVEGACIÓN Y DATOS
             const [view, setView] = React.useState('dashboard');
@@ -175,38 +196,69 @@
             const [expedientes, setExpedientes] = React.useState([]);
             const [ticketsQueue, setTicketsQueue] = React.useState(() => JSON.parse(localStorage.getItem('crediban_tickets_queue')) || []);
 
-            // ESTADOS DEL ESCÁNER QR RÁFAGA Y MULTICAJERO EN VIVO
+            // =====================================================================
+            // CONFIGURACIÓN PERSONALIZABLE DE IMPRESIÓN DE TICKETS Y QR
+            // =====================================================================
+            const [printConfig, setPrintConfig] = React.useState(() => {
+                const saved = localStorage.getItem('crediban_v20_print_cfg');
+                if (saved) {
+                    try { return JSON.parse(saved); } catch (e) {}
+                }
+                return {
+                    qrSize: 84,                 // Tamaño del QR en px (55 a 115)
+                    qrPosition: 'DERECHA',      // 'DERECHA' | 'IZQUIERDA' | 'ARRIBA' | 'GIGANTE'
+                    qrDataMode: 'COMPACTO',     // 'COMPACTO' (Sede|ID) | 'MINIMO' (Solo ID) | 'COMPLETO' (Sede|ID|Cliente)
+                    fontSizeCliente: 0,         // 0 = Automático inteligente, o valor fijo (10 a 22 px)
+                    fontSizeCodigo: 26,         // Tamaño del código rojo inferior (18 a 36 px)
+                    ticketHeightMm: 40,         // Altura de cada celda en mm (35 a 50 mm)
+                    showHeaderSede: true        // Mostrar/ocultar barra superior de sede
+                };
+            });
+
+            React.useEffect(() => {
+                localStorage.setItem('crediban_v20_print_cfg', JSON.stringify(printConfig));
+            }, [printConfig]);
+
+            // =====================================================================
+            // ESTADOS Y REFS DEL ESCÁNER QR RÁFAGA (SIN REINICIOS DE CÁMARA)
+            // =====================================================================
             const [scanMode, setScanMode] = React.useState('INVENTARIO'); // 'INVENTARIO' | 'RETORNO' | 'PRESTAMO'
             const [asesorLote, setAsesorLote] = React.useState('');
             const [cameraActive, setCameraActive] = React.useState(false);
+            const [camerasList, setCamerasList] = React.useState([]);
+            const [selectedCamId, setSelectedCamId] = React.useState('');
+            const [torchOn, setTorchOn] = React.useState(false);
             const [scanFeedback, setScanFeedback] = React.useState(null);
             const [scanLog, setScanLog] = React.useState([]);
             const [liveSyncActive, setLiveSyncActive] = React.useState(true);
             const [lastSyncTime, setLastSyncTime] = React.useState('');
             const [lectorFisicoInput, setLectorFisicoInput] = React.useState('');
 
+            // Referencias sincronizadas para que la cámara nunca tenga que reiniciarse al cambiar modo o asesor
+            const html5QrInstanceRef = React.useRef(null);
             const lastScannedRef = React.useRef({ code: '', time: 0 });
             const expedientesRef = React.useRef(expedientes);
-            React.useEffect(() => { expedientesRef.current = expedientes; }, [expedientes]);
+            const scanModeRef = React.useRef(scanMode);
+            const asesorLoteRef = React.useRef(asesorLote);
+            const operadorRef = React.useRef(operadorNombre);
+            const sedeRef = React.useRef(sedeActual);
 
+            React.useEffect(() => { expedientesRef.current = expedientes; }, [expedientes]);
+            React.useEffect(() => { scanModeRef.current = scanMode; }, [scanMode]);
+            React.useEffect(() => { asesorLoteRef.current = asesorLote; }, [asesorLote]);
+            React.useEffect(() => { operadorRef.current = operadorNombre; }, [operadorNombre]);
+            React.useEffect(() => { sedeRef.current = sedeActual; }, [sedeActual]);
             React.useEffect(() => { localStorage.setItem('crediban_tickets_queue', JSON.stringify(ticketsQueue)); }, [ticketsQueue]);
 
-            // Al cargar la pantalla de Login, consultar dinámicamente las sedes y parámetros del servidor
-            React.useEffect(() => {
-                const cargarCatalogoInicial = async () => {
-                    try {
-                        const res = await fetch(API_URL, {
-                            method: 'POST',
-                            body: JSON.stringify({ action: 'getParametros' })
-                        });
-                        const data = await res.json();
-                        if (data.status === 'success' && data.parametros) {
-                            aplicarCatalogoParametros(data.parametros);
-                        }
-                    } catch (e) {}
-                };
-                cargarCatalogoInicial();
-            }, []);
+            // Fetch seguro compatible con Google Apps Script (evita errores CORS en móviles)
+            const fetchGAS = async (payloadObj) => {
+                const res = await fetch(API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                    body: JSON.stringify(payloadObj)
+                });
+                return await res.json();
+            };
 
             const aplicarCatalogoParametros = (param) => {
                 if (!param) return;
@@ -236,33 +288,29 @@
             };
 
             // =====================================================================
-            // LOGIN CON VALIDACIÓN ESTRICTA DE ROLES (BLOQUEA ASESORES)
+            // LOGIN SIN SELECTOR DE SEDE (DETECCIÓN AUTOMÁTICA DESDE USUARIOS)
             // =====================================================================
             const handleLogin = async (e) => {
                 e.preventDefault();
                 setLoginErrorMsg('');
-                if (!sedeActual) return setLoginErrorMsg("Selecciona una sede para ingresar.");
-                if (!usuarioInput.trim()) return setLoginErrorMsg("Ingresa tu nombre de usuario.");
+                if (!usuarioInput.trim()) return setLoginErrorMsg("Ingresa tu usuario.");
+                if (!passwordInput.trim()) return setLoginErrorMsg("Ingresa tu contraseña.");
 
                 setIsLoading(true);
-                setLoadingMsg('Verificando credenciales y permisos en el Script de Usuarios...');
+                setLoadingMsg('Validando credenciales y detectando sede asignada...');
 
                 try {
-                    const res = await fetch(API_URL, {
-                        method: 'POST',
-                        body: JSON.stringify({
-                            action: 'login',
-                            usuario: usuarioInput.trim(),
-                            password: passwordInput,
-                            sede: sedeActual
-                        })
+                    // Enviamos sede vacío ('') para que el servidor asigne automáticamente la sede del usuario
+                    const data = await fetchGAS({
+                        action: 'login',
+                        usuario: usuarioInput.trim(),
+                        password: passwordInput.trim(),
+                        sede: ''
                     });
-                    const data = await res.json();
 
                     if (data.status !== 'success') {
                         setIsLoading(false);
                         setLoginErrorMsg(data.message || 'Usuario o contraseña incorrectos.');
-                        setPasswordInput('');
                         return;
                     }
 
@@ -270,68 +318,65 @@
                     const cargoDetectado = String(userObj.cargo || 'NO_AUTORIZADO').toUpperCase();
                     const rolClasificado = clasificarRolSistema(cargoDetectado);
 
-                    // BLOQUEO ESTRICTO A ASESORES Y ROLES NO AUTORIZADOS
                     if (rolClasificado === 'BLOQUEADO_ASESOR') {
                         playSound('alert');
                         setIsLoading(false);
-                        setLoginErrorMsg('⛔ ACCESO RESTRINGIDO: Los Asesores de Crédito no tienen permiso para ingresar al sistema de Control Físico de Expedientes. Acceso exclusivo para Cajeros, Administradores y Gerentes.');
-                        setPasswordInput('');
+                        setLoginErrorMsg('⛔ ACCESO DENEGADO: Los Asesores no tienen acceso a este sistema. Uso exclusivo para Cajeros, Administradores y Gerentes.');
                         return;
                     }
 
                     if (rolClasificado === 'NO_AUTORIZADO') {
                         playSound('alert');
                         setIsLoading(false);
-                        setLoginErrorMsg(`⛔ Rol sin acceso (${cargoDetectado}): Solo pueden ingresar Cajeros, Administradores y Gerentes.`);
-                        setPasswordInput('');
+                        setLoginErrorMsg(`⛔ Cargo sin autorización (${cargoDetectado}): Solo ingresan Cajeros, Administradores y Gerentes.`);
                         return;
                     }
 
-                    // Configurar sesión según el rol autorizado
-                    const sedeEfectiva = data.sede || userObj.sedeActiva || sedeActual;
-                    setSedeActual(sedeEfectiva);
+                    // Guardar o limpiar contraseña según el botón "Recordar contraseña"
+                    localStorage.setItem('crediban_v20_user', usuarioInput.trim());
+                    localStorage.setItem('crediban_v20_remember', rememberPass ? 'true' : 'false');
+                    if (rememberPass) {
+                        localStorage.setItem('crediban_v20_pass', passwordInput.trim());
+                    } else {
+                        localStorage.removeItem('crediban_v20_pass');
+                    }
+
+                    const sedeDetectada = data.sede || userObj.sedeActiva || 'HUACHO';
+                    setSedeActual(sedeDetectada);
+                    localStorage.setItem('crediban_v20_sede', sedeDetectada);
+
                     setOperadorNombre(userObj.nombreCorto || userObj.nombre || usuarioInput.toUpperCase());
-                    setCargoOriginal(cargoDetectado);
                     setRolSistema(rolClasificado);
-                    setSedesPermitidas(Array.isArray(userObj.sedesPermitidas) ? userObj.sedesPermitidas : [sedeEfectiva]);
+                    setSedesPermitidas(Array.isArray(userObj.sedesPermitidas) ? userObj.sedesPermitidas : [sedeDetectada]);
 
                     if (data.parametros) aplicarCatalogoParametros(data.parametros);
                     if (Array.isArray(data.asesores)) setAsesores(data.asesores);
                     if (Array.isArray(data.data)) setExpedientes(data.data);
 
-                    localStorage.setItem('crediban_v20_sede', sedeEfectiva);
-                    localStorage.setItem('crediban_v20_user', usuarioInput.trim());
                     setLastSyncTime(new Date().toLocaleTimeString());
-
-                    // Definir vista inicial según el rol:
-                    // - Administrador va directo al Buscador/Filtro de su Sede
-                    // - Cajero y Gerente van directo al Escáner QR Ráfaga
-                    if (rolClasificado === 'ADMINISTRADOR') {
-                        setView('dashboard');
-                    } else {
-                        setView('escaner');
-                    }
-
+                    setView(rolClasificado === 'ADMINISTRADOR' ? 'dashboard' : 'escaner');
                     setIsAuth(true);
                 } catch (err) {
-                    setLoginErrorMsg('❌ Error de conexión con el servidor. Verifica tu internet y que el Script V20 esté implementado.');
+                    setLoginErrorMsg('❌ Error de conexión con el servidor. Verifica tu conexión a internet.');
                 }
                 setIsLoading(false);
             };
 
-            // CAMBIO DE SEDE EN VIVO (PARA GERENTES)
+            // CAMBIO DE SEDE EN VIVO (HABILITADO EN BARRA SUPERIOR PARA GERENTES)
             const cambiarSedeActiva = async (nuevaSede) => {
                 if (!nuevaSede || nuevaSede === sedeActual) return;
                 setIsLoading(true);
-                setLoadingMsg(`Cargando base de datos de filial ${nuevaSede}...`);
+                setLoadingMsg(`Cargando expedientes de filial ${nuevaSede}...`);
                 try {
-                    const res = await fetch(API_URL, {
-                        method: 'POST',
-                        body: JSON.stringify({ action: 'getData', sede: nuevaSede, password: passwordInput, usuario: operadorNombre })
+                    const data = await fetchGAS({
+                        action: 'getData',
+                        sede: nuevaSede,
+                        password: passwordInput,
+                        usuario: operadorNombre
                     });
-                    const data = await res.json();
                     if (data.status === 'success') {
                         setSedeActual(nuevaSede);
+                        localStorage.setItem('crediban_v20_sede', nuevaSede);
                         setExpedientes(data.data || []);
                         if (Array.isArray(data.asesores)) setAsesores(data.asesores);
                         if (data.parametros) aplicarCatalogoParametros(data.parametros);
@@ -350,11 +395,11 @@
                 if (!isAuth || !liveSyncActive || (view !== 'escaner' && view !== 'dashboard')) return;
                 const timer = setInterval(async () => {
                     try {
-                        const res = await fetch(API_URL, {
-                            method: 'POST',
-                            body: JSON.stringify({ action: 'pollLive', sede: sedeActual, password: passwordInput })
+                        const data = await fetchGAS({
+                            action: 'pollLive',
+                            sede: sedeActual,
+                            password: passwordInput
                         });
-                        const data = await res.json();
                         if (data.status === 'success' && Array.isArray(data.data)) {
                             setExpedientes(data.data);
                             if (Array.isArray(data.asesores)) setAsesores(data.asesores);
@@ -366,65 +411,71 @@
                 return () => clearInterval(timer);
             }, [isAuth, liveSyncActive, view, sedeActual, passwordInput]);
 
-            // GUARDADO EN LA NUBE (SILENCIOSO PARA EL ESCÁNER RÁFAGA)
             const syncExpedienteCloud = async (expToSave, silent = false, checkDuplicateInv = false) => {
                 if (!silent) {
                     setIsLoading(true);
-                    setLoadingMsg('Guardando cambios en Google Sheets...');
+                    setLoadingMsg('Sincronizando con Google Sheets...');
                 }
                 try {
-                    const res = await fetch(API_URL, {
-                        method: 'POST',
-                        body: JSON.stringify({
-                            action: 'save',
-                            sede: sedeActual,
-                            usuario: operadorNombre,
-                            password: passwordInput,
-                            data: expToSave,
-                            checkDuplicateInv
-                        })
+                    const data = await fetchGAS({
+                        action: 'save',
+                        sede: sedeRef.current,
+                        usuario: operadorRef.current,
+                        password: passwordInput,
+                        data: expToSave,
+                        checkDuplicateInv
                     });
-                    const data = await res.json();
                     if (!silent) setIsLoading(false);
                     return data;
                 } catch (err) {
                     if (!silent) {
                         setIsLoading(false);
-                        alert('❌ Error de conexión al sincronizar.');
+                        alert('❌ Error de red al sincronizar el expediente.');
                     }
                     return { status: 'error' };
                 }
             };
 
             // =====================================================================
-            // PROCESADOR CENTRAL DEL ESCÁNER QR RÁFAGA (CAJEROS Y GERENTES)
+            // PROCESADOR ULTRA-RÁPIDO DE LECTURA QR (LEE TODOS LOS FORMATOS)
             // =====================================================================
-            const procesarLecturaQR = async (rawText) => {
-                if (!rawText || !puedeOperarCaja) return;
+            const procesarLecturaQR = React.useCallback(async (rawText) => {
+                if (!rawText) return;
                 const clean = String(rawText).trim().toUpperCase();
 
-                // Filtro Anti-Rebote (1.4 seg para el mismo código exacto)
+                // Filtro Anti-Rebote (1.3 seg para el mismo código exacto, instantáneo para códigos distintos)
                 const nowMs = Date.now();
-                if (lastScannedRef.current.code === clean && (nowMs - lastScannedRef.current.time) < 1400) {
+                if (lastScannedRef.current.code === clean && (nowMs - lastScannedRef.current.time) < 1300) {
                     return;
                 }
                 lastScannedRef.current = { code: clean, time: nowMs };
 
-                // Extraer ID de Expediente (Formato QR: SEDE|001-00124|CLIENTE)
+                // Extraer ID de Expediente de cualquier formato:
+                // 1) "HUACHO|001-00124|CLIENTE"
+                // 2) "HUACHO|001-00124"
+                // 3) "001-00124" o "124"
                 let idDetectado = '';
                 let clienteQR = '';
+
                 if (clean.includes('|')) {
                     const partes = clean.split('|').map(p => p.trim());
-                    idDetectado = partes[1] ? formatIdExpediente(partes[1].includes('-') ? partes[1].split('-')[1] : partes[1]) : '';
-                    clienteQR = partes[2] || '';
+                    const parteCodigo = partes.find(p => /\d+/.test(p)) || partes[1] || partes[0];
+                    const numExtraido = parteCodigo.includes('-') ? parteCodigo.split('-').pop() : parteCodigo;
+                    idDetectado = formatIdExpediente(numExtraido);
+                    if (partes.length >= 3) clienteQR = partes[2];
                 } else {
-                    const base = clean.includes('-') ? clean.split('-')[1] : clean;
-                    idDetectado = formatIdExpediente(base);
+                    const matchExp = clean.match(/001-(\d+)/);
+                    if (matchExp) {
+                        idDetectado = formatIdExpediente(matchExp[1]);
+                    } else {
+                        const soloDigitos = clean.replace(/\D/g, '');
+                        idDetectado = formatIdExpediente(soloDigitos);
+                    }
                 }
 
                 if (!idDetectado) {
                     playSound('alert');
-                    setScanFeedback({ type: 'error', title: 'CÓDIGO QR INVÁLIDO', subtitle: clean });
+                    setScanFeedback({ type: 'error', title: 'CÓDIGO QR NO RECONOCIDO', subtitle: `Lectura: ${clean}` });
                     return;
                 }
 
@@ -433,23 +484,26 @@
                     playSound('alert');
                     setScanFeedback({
                         type: 'error',
-                        title: `EXPEDIENTE ${idDetectado} NO EXISTE EN ${sedeActual}`,
-                        subtitle: clienteQR ? `Etiqueta: ${clienteQR}` : 'Regístralo primero en Base de Datos'
+                        title: `EXPEDIENTE ${idDetectado} NO EXISTE EN ${sedeRef.current}`,
+                        subtitle: clienteQR ? `Cliente en etiqueta: ${clienteQR}` : 'Regístralo primero en la Base de Datos'
                     });
                     return;
                 }
 
+                const modoActual = scanModeRef.current;
+                const asesorSeleccionado = asesorLoteRef.current;
+                const cajeroNombre = operadorRef.current;
                 const hoySesion = getHoyId();
                 const estadoPrevio = JSON.parse(JSON.stringify(exp));
 
                 // MODO 1: INVENTARIO EN VIVO MULTICAJERO
-                if (scanMode === 'INVENTARIO') {
+                if (modoActual === 'INVENTARIO') {
                     if (exp.invSesion === hoySesion && exp.invFecha) {
                         playSound('duplicate');
                         setScanFeedback({
                             type: 'warning',
                             title: `⚠️ YA CONTABILIZADO: ${exp.id}`,
-                            subtitle: `${exp.cliente} — Registrado por ${exp.invCajero || 'CAJERO'} (${exp.invFecha})`
+                            subtitle: `${exp.cliente} — Escaneado por ${exp.invCajero || 'CAJERO'} (${exp.invFecha})`
                         });
                         return;
                     }
@@ -463,7 +517,7 @@
                     nuevoHist.unshift({
                         fecha: horaActual,
                         accion: 'INVENTARIO QR',
-                        detalle: `Verificado en estante por ${operadorNombre}${estabaFuera ? ' (Retornado automáticamente a Caja)' : ''}`
+                        detalle: `Verificado en estante por ${cajeroNombre}${estabaFuera ? ' (Retornado automáticamente a Caja)' : ''}`
                     });
 
                     const actualizado = {
@@ -471,7 +525,7 @@
                         ubicacionFisica: 'CAJA (ARCHIVO)',
                         fechaUltimoMov: horaActual,
                         invFecha: horaActual,
-                        invCajero: operadorNombre,
+                        invCajero: cajeroNombre,
                         invSesion: hoySesion,
                         historial: nuevoHist
                     };
@@ -497,7 +551,7 @@
                 }
 
                 // MODO 2: RETORNO INTELIGENTE A CAJA (SIN ELEGIR ASESOR)
-                if (scanMode === 'RETORNO') {
+                if (modoActual === 'RETORNO') {
                     playSound('beep');
                     const horaActual = getFechaHora();
                     const ubicacionPrevia = exp.ubicacionFisica;
@@ -505,7 +559,7 @@
                     nuevoHist.unshift({
                         fecha: horaActual,
                         accion: 'DEVOLUCIÓN QR',
-                        detalle: `Retornado físicamente a Caja por ${operadorNombre} (Antes: ${ubicacionPrevia})`
+                        detalle: `Retornado físicamente a Caja por ${cajeroNombre} (Antes: ${ubicacionPrevia})`
                     });
 
                     const actualizado = {
@@ -527,13 +581,13 @@
                 }
 
                 // MODO 3: SALIDA / PRÉSTAMO POR LOTE A ASESOR
-                if (scanMode === 'PRESTAMO') {
-                    if (!asesorLote) {
+                if (modoActual === 'PRESTAMO') {
+                    if (!asesorSeleccionado) {
                         playSound('alert');
                         setScanFeedback({
                             type: 'error',
                             title: 'SELECCIONA UN ASESOR PRIMERO',
-                            subtitle: 'Elige al asesor arriba antes de escanear las carpetas de salida'
+                            subtitle: 'Elige al asesor en la lista naranja antes de escanear las carpetas'
                         });
                         return;
                     }
@@ -542,17 +596,17 @@
                     playSound(esRestringido ? 'alert' : 'beep');
 
                     const horaActual = getFechaHora();
-                    const prestamoCruzado = !exp.ubicacionFisica.includes('CAJA') && exp.ubicacionFisica !== `CON ASESOR: ${asesorLote}`;
+                    const prestamoCruzado = !exp.ubicacionFisica.includes('CAJA') && exp.ubicacionFisica !== `CON ASESOR: ${asesorSeleccionado}`;
                     const nuevoHist = [...(exp.historial || [])];
                     nuevoHist.unshift({
                         fecha: horaActual,
                         accion: 'PRÉSTAMO QR',
-                        detalle: `Entregado a ${asesorLote} por ${operadorNombre}${prestamoCruzado ? ` (Transferido desde ${exp.ubicacionFisica})` : ''}`
+                        detalle: `Entregado a ${asesorSeleccionado} por ${cajeroNombre}${prestamoCruzado ? ` (Transferido desde ${exp.ubicacionFisica})` : ''}`
                     });
 
                     const actualizado = {
                         ...exp,
-                        ubicacionFisica: `CON ASESOR: ${asesorLote}`,
+                        ubicacionFisica: `CON ASESOR: ${asesorSeleccionado}`,
                         fechaUltimoMov: horaActual,
                         historial: nuevoHist
                     };
@@ -561,10 +615,104 @@
                     setScanLog(prev => [{ id: exp.id, cliente: exp.cliente, prev: estadoPrevio }, ...prev.slice(0, 29)]);
                     setScanFeedback({
                         type: esRestringido ? 'danger_ok' : (prestamoCruzado ? 'warning' : 'success'),
-                        title: `📤 ENTREGADO A ${asesorLote}: ${exp.id}`,
+                        title: `📤 ENTREGADO A ${asesorSeleccionado}: ${exp.id}`,
                         subtitle: `${exp.cliente} | Estado: ${exp.estadoCredito}${prestamoCruzado ? ` | ⚠️ Figuraba ${exp.ubicacionFisica}` : ''}`
                     });
                     syncExpedienteCloud(actualizado, true);
+                }
+            }, []);
+
+            // =====================================================================
+            // MOTOR DE CÁMARA ROBUSTO CON ACELERACIÓN POR HARDWARE Y LINTERNA
+            // =====================================================================
+            React.useEffect(() => {
+                if (view !== 'escaner' && cameraActive) {
+                    setCameraActive(false);
+                }
+            }, [view]);
+
+            React.useEffect(() => {
+                let isMounted = true;
+
+                const iniciarEscaner = async () => {
+                    if (!cameraActive || view !== 'escaner' || !puedeOperarCaja) return;
+
+                    try {
+                        // Detener instancia previa si existiera
+                        if (html5QrInstanceRef.current && html5QrInstanceRef.current.isScanning) {
+                            await html5QrInstanceRef.current.stop();
+                            html5QrInstanceRef.current.clear();
+                        }
+
+                        // Obtener lista de cámaras del dispositivo
+                        if (camerasList.length === 0 && window.Html5Qrcode.getCameras) {
+                            try {
+                                const devices = await window.Html5Qrcode.getCameras();
+                                if (isMounted && devices && devices.length > 0) {
+                                    setCamerasList(devices);
+                                }
+                            } catch (e) {}
+                        }
+
+                        const qrReader = new window.Html5Qrcode("qr-reader-box", {
+                            experimentalFeatures: { useBarCodeDetectorIfSupported: true },
+                            verbose: false
+                        });
+                        html5QrInstanceRef.current = qrReader;
+
+                        const camConfig = selectedCamId
+                            ? { deviceId: { exact: selectedCamId } }
+                            : { facingMode: "environment" };
+
+                        await qrReader.start(
+                            camConfig,
+                            {
+                                fps: 25,
+                                qrbox: (viewfinderWidth, viewfinderHeight) => {
+                                    const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
+                                    const boxSize = Math.max(170, Math.floor(minEdge * 0.80));
+                                    return { width: boxSize, height: boxSize };
+                                },
+                                aspectRatio: 1.0,
+                                disableFlip: false
+                            },
+                            (decodedText) => {
+                                procesarLecturaQR(decodedText);
+                            },
+                            () => {}
+                        );
+                    } catch (err) {
+                        if (isMounted) {
+                            alert("No se pudo iniciar la cámara. Asegúrate de abrir la app en HTTPS o localhost y aceptar los permisos de cámara.");
+                            setCameraActive(false);
+                        }
+                    }
+                };
+
+                iniciarEscaner();
+
+                return () => {
+                    isMounted = false;
+                    setTorchOn(false);
+                    if (html5QrInstanceRef.current && html5QrInstanceRef.current.isScanning) {
+                        html5QrInstanceRef.current.stop()
+                            .then(() => html5QrInstanceRef.current.clear())
+                            .catch(() => {});
+                    }
+                };
+            }, [cameraActive, view, selectedCamId]);
+
+            // Activar / Desactivar Linterna (Flash) del celular si el lente lo soporta
+            const toggleLinterna = async () => {
+                if (!html5QrInstanceRef.current || !html5QrInstanceRef.current.isScanning) return;
+                try {
+                    const nextState = !torchOn;
+                    await html5QrInstanceRef.current.applyVideoConstraints({
+                        advanced: [{ torch: nextState }]
+                    });
+                    setTorchOn(nextState);
+                } catch (e) {
+                    alert("Este lente de cámara no soporta encendido de linterna desde el navegador.");
                 }
             };
 
@@ -587,10 +735,7 @@
                 setIsLoading(true);
                 setLoadingMsg('Reiniciando contadores de inventario en la sede...');
                 try {
-                    await fetch(API_URL, {
-                        method: 'POST',
-                        body: JSON.stringify({ action: 'resetInventario', sede: sedeActual, usuario: operadorNombre })
-                    });
+                    await fetchGAS({ action: 'resetInventario', sede: sedeActual, usuario: operadorNombre });
                     setExpedientes(prev => prev.map(e => ({ ...e, invFecha: '', invCajero: '', invSesion: '' })));
                     setScanLog([]);
                     setScanFeedback(null);
@@ -599,32 +744,6 @@
                 }
                 setIsLoading(false);
             };
-
-            // CICLO DE CÁMARA CONTINUA HTML5-QRCODE
-            React.useEffect(() => {
-                if (view !== 'escaner' && cameraActive) setCameraActive(false);
-            }, [view]);
-
-            React.useEffect(() => {
-                let html5QrCode = null;
-                if (cameraActive && view === 'escaner' && puedeOperarCaja) {
-                    html5QrCode = new window.Html5Qrcode("qr-reader-box");
-                    html5QrCode.start(
-                        { facingMode: "environment" },
-                        { fps: 24, qrbox: { width: 230, height: 230 }, aspectRatio: 1.0 },
-                        (decodedText) => procesarLecturaQR(decodedText),
-                        () => {}
-                    ).catch(() => {
-                        alert("No se pudo abrir la cámara. Verifica los permisos del navegador.");
-                        setCameraActive(false);
-                    });
-                }
-                return () => {
-                    if (html5QrCode && html5QrCode.isScanning) {
-                        html5QrCode.stop().then(() => html5QrCode.clear()).catch(() => {});
-                    }
-                };
-            }, [cameraActive, view, scanMode, asesorLote]);
 
             // =====================================================================
             // REGISTRO, CATEGORIZACIÓN Y EDICIÓN DE EXPEDIENTES
@@ -674,27 +793,22 @@
                 alert(`✅ Expediente ${idFinal} registrado en la nube.`);
             };
 
-            // EDICIÓN COMPLETA Y CATEGORIZACIÓN (EXCLUSIVO GERENTES)
             const guardarEdicionGerencial = async (expActual) => {
                 if (!esGerente || !editMode) return;
                 setIsLoading(true);
                 setLoadingMsg('Actualizando categorización y datos del expediente...');
                 try {
-                    const res = await fetch(API_URL, {
-                        method: 'POST',
-                        body: JSON.stringify({
-                            action: 'editarCategorizacion',
-                            sede: sedeActual,
-                            id: expActual.id,
-                            cliente: editMode.nuevoCliente,
-                            estadoCredito: editMode.nuevoEstado,
-                            asesorTitular: editMode.nuevoAsesor,
-                            ubicacionFisica: editMode.nuevaUbicacion,
-                            categoriaExtra: editMode.nuevaCatExtra,
-                            usuario: operadorNombre
-                        })
+                    const data = await fetchGAS({
+                        action: 'editarCategorizacion',
+                        sede: sedeActual,
+                        id: expActual.id,
+                        cliente: editMode.nuevoCliente,
+                        estadoCredito: editMode.nuevoEstado,
+                        asesorTitular: editMode.nuevoAsesor,
+                        ubicacionFisica: editMode.nuevaUbicacion,
+                        categoriaExtra: editMode.nuevaCatExtra,
+                        usuario: operadorNombre
                     });
-                    const data = await res.json();
                     if (data.status === 'success') {
                         const ahora = getFechaHora();
                         const nuevoHist = [...(expActual.historial || [])];
@@ -725,7 +839,7 @@
             };
 
             // =====================================================================
-            // BUSCADOR MANUAL DE PRÉSTAMOS / DEVOLUCIONES (CAJEROS Y GERENTES)
+            // BUSCADOR MANUAL DE PRÉSTAMOS / DEVOLUCIONES
             // =====================================================================
             const [movBusqueda, setMovBusqueda] = React.useState('');
             const [sugerencias, setSugerencias] = React.useState([]);
@@ -768,7 +882,7 @@
             };
 
             // =====================================================================
-            // FILTROS Y BUSCADOR DE SEDE (PARA ADMINISTRADORES, CAJEROS Y GERENTES)
+            // FILTROS Y BUSCADOR DE SEDE (ADMINISTRADORES, CAJEROS Y GERENTES)
             // =====================================================================
             const [dashSearchQuery, setDashSearchQuery] = React.useState('');
             const [dashFilterAsesor, setDashFilterAsesor] = React.useState('TODOS');
@@ -780,7 +894,6 @@
             const hoySesionId = getHoyId();
             let listaDash = expedientes;
 
-            // Filtro por Búsqueda de Número o Nombre del Cliente
             if (dashSearchQuery.trim() !== '') {
                 const q = dashSearchQuery.toUpperCase().trim();
                 const qNum = q.replace(/^(001-)?0*/, '');
@@ -799,7 +912,7 @@
             const totalContabilizadosHoy = expedientes.filter(e => e.invSesion === hoySesionId && e.invFecha).length;
 
             // =====================================================================
-            // EXPORTACIÓN CSV Y PDF DE FILTROS (EXCLUSIVO PARA GERENTES)
+            // EXPORTACIÓN CSV Y PDF (EXCLUSIVO GERENTES)
             // =====================================================================
             const exportarCSV = (soloSeleccionFiltrada = false) => {
                 if (!puedeExportar) return alert("⛔ Solo los Gerentes tienen autorización para exportar registros.");
@@ -861,7 +974,6 @@
                 setModalReporte(false);
             };
 
-            // CARGA MASIVA CSV (PARA CAJEROS Y GERENTES)
             const parseCSVLine = (line) => {
                 const result = []; let current = ''; let inQuotes = false;
                 for (let i = 0; i < line.length; i++) {
@@ -924,10 +1036,7 @@
                     if (listaParaLaNube.length > 0) {
                         setIsLoading(true);
                         setLoadingMsg('Subiendo lote masivo a Google Sheets...');
-                        await fetch(API_URL, {
-                            method: 'POST',
-                            body: JSON.stringify({ action: 'bulkSave', sede: sedeActual, usuario: operadorNombre, data: listaParaLaNube })
-                        });
+                        await fetchGAS({ action: 'bulkSave', sede: sedeActual, usuario: operadorNombre, data: listaParaLaNube });
                         setIsLoading(false);
                         alert(`✅ Carga Exitosa: Se migraron ${count} expedientes a ${sedeActual}.`);
                     }
@@ -936,7 +1045,7 @@
             };
 
             // =====================================================================
-            // GENERADOR MASIVO DE TICKETS QR (A4 - 4x6 = 24 TICKETS POR HOJA)
+            // GENERADOR MASIVO DE TICKETS QR Y PERSONALIZADOR DE DISEÑO A4
             // =====================================================================
             const [manualId, setManualId] = React.useState('');
             const [manualCliente, setManualCliente] = React.useState('');
@@ -991,16 +1100,26 @@
             };
 
             const parseTicketName = (fullName) => {
-                const words = fullName.trim().split(/\s+/);
+                const words = String(fullName || '').trim().split(/\s+/);
                 if (words.length <= 2) return { part1: fullName, part2: '' };
                 return { part1: `${words[0]} ${words[1]}`, part2: words.slice(2).join(' ') };
             };
 
-            const getTicketNameStyle = (name) => {
-                const len = name.length;
-                if (len >= 35) return 'text-[10px] leading-[1.05]';
-                if (len >= 20) return 'text-[12px] leading-[1.1]';
-                return 'text-[14px] leading-[1.1]'; 
+            const obtenerEstiloNombreCliente = (name) => {
+                if (printConfig.fontSizeCliente > 0) {
+                    return { fontSize: `${printConfig.fontSizeCliente}px`, lineHeight: '1.08', fontFamily: 'Arial, sans-serif' };
+                }
+                const len = String(name || '').length;
+                if (len >= 34) return { fontSize: '10px', lineHeight: '1.05', fontFamily: 'Arial, sans-serif' };
+                if (len >= 22) return { fontSize: '12px', lineHeight: '1.08', fontFamily: 'Arial, sans-serif' };
+                return { fontSize: '14px', lineHeight: '1.1', fontFamily: 'Arial, sans-serif' };
+            };
+
+            const armarPayloadQR = (ticket) => {
+                const sedeT = ticket.sede || sedeActual;
+                if (printConfig.qrDataMode === 'MINIMO') return `${ticket.id}`;
+                if (printConfig.qrDataMode === 'COMPACTO') return `${sedeT}|${ticket.id}`;
+                return `${sedeT}|${ticket.id}|${ticket.cliente}`;
             };
 
             const processTicketsForPrint = () => {
@@ -1020,7 +1139,7 @@
             // GESTIÓN DINÁMICA DE PARÁMETROS Y SINCRONIZACIÓN (GERENCIA)
             // =====================================================================
             const [nuevoParamValor, setNuevoParamValor] = React.useState('');
-            const [nuevoParamTipo, setNuevoParamTipo] = React.useState('ASESOR'); // 'ASESOR' | 'ESTADO_CREDITO' | 'UBICACION' | 'SEDE'
+            const [nuevoParamTipo, setNuevoParamTipo] = React.useState('ASESOR');
 
             const agregarParametroCloud = async (e) => {
                 e.preventDefault();
@@ -1028,18 +1147,14 @@
                 setIsLoading(true);
                 setLoadingMsg(`Agregando ${nuevoParamTipo} al sistema...`);
                 try {
-                    const res = await fetch(API_URL, {
-                        method: 'POST',
-                        body: JSON.stringify({
-                            action: nuevoParamTipo === 'SEDE' ? 'crearSede' : 'addParametro',
-                            tipo: nuevoParamTipo,
-                            valor: nuevoParamValor.toUpperCase().trim(),
-                            nuevaSede: nuevoParamValor.toUpperCase().trim(),
-                            sedeAplica: nuevoParamTipo === 'ASESOR' ? sedeActual : 'GLOBAL',
-                            usuario: operadorNombre
-                        })
+                    const data = await fetchGAS({
+                        action: nuevoParamTipo === 'SEDE' ? 'crearSede' : 'addParametro',
+                        tipo: nuevoParamTipo,
+                        valor: nuevoParamValor.toUpperCase().trim(),
+                        nuevaSede: nuevoParamValor.toUpperCase().trim(),
+                        sedeAplica: nuevoParamTipo === 'ASESOR' ? sedeActual : 'GLOBAL',
+                        usuario: operadorNombre
                     });
-                    const data = await res.json();
                     if (data.status === 'success') {
                         if (data.parametros) aplicarCatalogoParametros(data.parametros);
                         if (nuevoParamTipo === 'ASESOR' && !asesores.includes(nuevoParamValor.toUpperCase().trim())) {
@@ -1059,17 +1174,13 @@
                 setIsLoading(true);
                 setLoadingMsg('Actualizando parámetros...');
                 try {
-                    const res = await fetch(API_URL, {
-                        method: 'POST',
-                        body: JSON.stringify({
-                            action: 'deleteParametro',
-                            tipo,
-                            valor,
-                            sedeAplica: sedeActual,
-                            usuario: operadorNombre
-                        })
+                    const data = await fetchGAS({
+                        action: 'deleteParametro',
+                        tipo,
+                        valor,
+                        sedeAplica: sedeActual,
+                        usuario: operadorNombre
                     });
-                    const data = await res.json();
                     if (data.status === 'success' && data.parametros) {
                         aplicarCatalogoParametros(data.parametros);
                         if (tipo === 'ASESOR') setAsesores(asesores.filter(a => a !== valor));
@@ -1083,14 +1194,10 @@
                 setIsLoading(true);
                 setLoadingMsg('Sincronizando sedes, cargos y asesores con el Script Maestro de Usuarios...');
                 try {
-                    const res = await fetch(API_URL, {
-                        method: 'POST',
-                        body: JSON.stringify({ action: 'syncUsuarios', sede: sedeActual })
-                    });
-                    const data = await res.json();
+                    const data = await fetchGAS({ action: 'syncUsuarios', sede: sedeActual });
                     if (data.status === 'success') {
                         if (data.parametros) aplicarCatalogoParametros(data.parametros);
-                        alert(`✅ Sincronización completada con éxito.\nUsuarios sincronizados: ${data.sync?.usuariosSincronizados || 'OK'}`);
+                        alert(`✅ Sincronización completada.\nUsuarios sincronizados: ${data.sync?.usuariosSincronizados || 'OK'}`);
                     }
                 } catch (e) {
                     alert('Error al sincronizar con el Script de Usuarios.');
@@ -1133,7 +1240,7 @@
             );
 
             // =====================================================================
-            // PANTALLA DE LOGIN (ACCESO EXCLUSIVO: CAJEROS, ADMINISTRADORES, GERENTES)
+            // PANTALLA DE LOGIN (SIN SELECCIÓN DE SEDE + BOTÓN RECORDAR CONTRASEÑA)
             // =====================================================================
             if (!isAuth) {
                 return (
@@ -1149,8 +1256,8 @@
                                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 240"><g fill="#59B447"><rect x="90" y="8" width="24" height="13" rx="6.5"/><rect x="71" y="31" width="61" height="13" rx="6.5"/><rect x="50" y="55" width="74" height="13" rx="6.5"/><rect x="31" y="79" width="75" height="13" rx="6.5"/><rect x="24" y="103" width="63" height="13" rx="6.5"/><path d="M143 55 C141 78 130 95 111 107 C96 117 81 122 72 134 C62 147 63 166 70 181 C76 195 87 208 97 216 C107 201 118 189 131 177 C144 166 157 156 164 141 C173 123 173 104 168 89 C164 74 156 62 143 55 Z"/></g></svg>
                             </div>
                             <h1 className="text-[#59B447] font-bold text-3xl tracking-widest mb-1" style={{ fontFamily: "Georgia" }}>CREDIBAN</h1>
-                            <p className="text-slate-400 text-xs tracking-wider uppercase mb-2">Control de Expedientes & QR (V20)</p>
-                            <div className="inline-flex items-center gap-1.5 bg-slate-800/80 border border-slate-700 text-slate-300 text-[10px] font-bold px-3 py-1 rounded-full mb-5">
+                            <p className="text-slate-400 text-xs tracking-wider uppercase mb-2">Control de Expedientes & QR (V20.1)</p>
+                            <div className="inline-flex items-center gap-1.5 bg-slate-800/80 border border-slate-700 text-slate-300 text-[10px] font-bold px-3 py-1 rounded-full mb-6">
                                 <i className="fa-solid fa-shield-halved text-[#59B447]"></i>
                                 Acceso exclusivo: Cajeros • Administradores • Gerentes
                             </div>
@@ -1163,27 +1270,57 @@
                             
                             <form onSubmit={handleLogin} className="space-y-4">
                                 <div className="text-left">
-                                    <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5 ml-1">Sede (Filial)</label>
-                                    <select required value={sedeActual} onChange={e=>setSedeActual(e.target.value)} className="w-full p-3.5 bg-slate-900/50 border border-slate-700/50 rounded-2xl focus:ring-2 focus:ring-[#59B447] outline-none text-white font-bold">
-                                        {sedesDisponibles.map(s => <option key={s} value={s}>{s}</option>)}
-                                    </select>
-                                </div>
-                                <div className="text-left">
-                                    <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5 ml-1">Usuario (Sincronizado con Script de Usuarios)</label>
+                                    <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5 ml-1">Usuario</label>
                                     <div className="relative">
                                         <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-500"><i className="fa-solid fa-user-lock"></i></div>
-                                        <input type="text" required value={usuarioInput} onChange={e=>setUsuarioInput(e.target.value)} className="w-full pl-12 p-3.5 bg-slate-900/50 border border-slate-700/50 rounded-2xl focus:ring-2 focus:ring-[#59B447] outline-none text-white font-bold uppercase" placeholder="Ej. NOMBRE.A" />
+                                        <input
+                                            type="text"
+                                            required
+                                            value={usuarioInput}
+                                            onChange={e=>setUsuarioInput(e.target.value)}
+                                            className="w-full pl-12 p-3.5 bg-slate-900/50 border border-slate-700/50 rounded-2xl focus:ring-2 focus:ring-[#59B447] outline-none text-white font-bold uppercase"
+                                            placeholder="Ej. NOMBRE.A"
+                                        />
                                     </div>
                                 </div>
+
                                 <div className="text-left">
                                     <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5 ml-1">Contraseña</label>
                                     <div className="relative">
                                         <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-500"><i className="fa-solid fa-lock"></i></div>
-                                        <input type="password" required value={passwordInput} onChange={e=>setPasswordInput(e.target.value)} className="w-full pl-12 p-3.5 bg-slate-900/50 border border-slate-700/50 rounded-2xl focus:ring-2 focus:ring-[#59B447] outline-none text-white font-mono tracking-widest" placeholder="••••••••" />
+                                        <input
+                                            type={showPassLogin ? "text" : "password"}
+                                            required
+                                            value={passwordInput}
+                                            onChange={e=>setPasswordInput(e.target.value)}
+                                            className="w-full pl-12 pr-12 p-3.5 bg-slate-900/50 border border-slate-700/50 rounded-2xl focus:ring-2 focus:ring-[#59B447] outline-none text-white font-mono tracking-widest"
+                                            placeholder="••••••••"
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowPassLogin(!showPassLogin)}
+                                            className="absolute inset-y-0 right-0 pr-4 flex items-center text-slate-400 hover:text-white"
+                                        >
+                                            <i className={`fa-solid ${showPassLogin ? 'fa-eye-slash' : 'fa-eye'}`}></i>
+                                        </button>
                                     </div>
                                 </div>
+
+                                {/* Botón / Casilla de Recordar Contraseña */}
+                                <div className="flex items-center justify-between px-1 pt-1">
+                                    <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                                        <input
+                                            type="checkbox"
+                                            checked={rememberPass}
+                                            onChange={e => setRememberPass(e.target.checked)}
+                                            className="w-4 h-4 rounded accent-[#59B447] cursor-pointer"
+                                        />
+                                        <span className="text-xs font-bold text-slate-300">Recordar usuario y contraseña</span>
+                                    </label>
+                                </div>
+
                                 <button type="submit" className="w-full bg-gradient-to-r from-[#59B447] to-[#4a973a] text-white font-bold py-4 rounded-2xl shadow-lg mt-2 hover:from-[#4a973a] transition-all">
-                                    Validar Acceso <i className="fa-solid fa-right-to-bracket text-xs ml-2"></i>
+                                    Ingresar al Sistema <i className="fa-solid fa-right-to-bracket text-xs ml-2"></i>
                                 </button>
                             </form>
                         </div>
@@ -1192,7 +1329,7 @@
             }
 
             // =====================================================================
-            // INTERFAZ PRINCIPAL ADAPTADA AL ROL (CAJERO / ADMINISTRADOR / GERENTE)
+            // INTERFAZ PRINCIPAL
             // =====================================================================
             return (
                 <div className="min-h-screen flex flex-col pb-10 relative">
@@ -1208,7 +1345,6 @@
                     {historialVisible && <ModalHistorial exp={historialVisible} onClose={() => setHistorialVisible(null)} />}
                     {puedeOperarCaja && <input type="file" accept=".csv" className="hidden no-print" ref={csvInputRef} onChange={importarCSV} />}
 
-                    {/* Modal Reporte PDF (Exclusivo Gerentes) */}
                     {modalReporte && puedeExportar && (
                         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4 modal-bg no-print">
                             <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden p-6 text-center">
@@ -1222,7 +1358,6 @@
                         </div>
                     )}
 
-                    {/* BARRA SUPERIOR CON INDICADOR DE ROL Y CONTROLES SEGÚN PERMISOS */}
                     <header className="bg-white shadow-sm border-b border-slate-200 px-4 py-3 sticky top-0 z-40 no-print">
                         <div className="max-w-7xl mx-auto">
                             <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
@@ -1232,7 +1367,6 @@
                                     </div>
                                     <span className="text-[#59B447] font-bold text-lg sm:text-xl tracking-widest" style={{ fontFamily: "Georgia" }}>CREDIBAN</span>
 
-                                    {/* Si es Gerente puede cambiar de filial en vivo; Cajero y Admin ven su sede fija */}
                                     {esGerente ? (
                                         <div className="flex items-center bg-blue-50 border border-blue-200 rounded-lg px-2 py-1">
                                             <i className="fa-solid fa-building text-blue-600 text-xs mr-1.5"></i>
@@ -1261,20 +1395,18 @@
                                         {liveSyncActive ? `En Vivo (${lastSyncTime || 'ON'})` : 'Sync Pausado'}
                                     </button>
 
-                                    {/* BOTÓN EXPORTAR CSV: EXCLUSIVO PARA GERENTES (OCULTO PARA ADMINISTRADORES Y CAJEROS) */}
                                     {puedeExportar && (
                                         <button onClick={() => exportarCSV(false)} className="bg-slate-800 text-white px-3 py-1.5 rounded text-xs font-bold shadow-sm hover:bg-slate-700">
                                             <i className="fa-solid fa-file-csv mr-1"></i> Exportar Todo CSV
                                         </button>
                                     )}
 
-                                    <button onClick={() => { setCameraActive(false); setIsAuth(false); setExpedientes([]); setPasswordInput(''); }} className="bg-red-50 text-red-600 px-3 py-1.5 rounded text-xs font-bold shadow-sm hover:bg-red-100" title="Cerrar Sesión">
+                                    <button onClick={() => { setCameraActive(false); setIsAuth(false); setExpedientes([]); }} className="bg-red-50 text-red-600 px-3 py-1.5 rounded text-xs font-bold shadow-sm hover:bg-red-100" title="Cerrar Sesión">
                                         <i className="fa-solid fa-power-off"></i>
                                     </button>
                                 </div>
                             </div>
 
-                            {/* PESTAÑAS DE NAVEGACIÓN FILTRADAS ESTRICTAMENTE POR ROL */}
                             <div className="flex gap-5 text-xs font-semibold text-slate-500 overflow-x-auto">
                                 {puedeOperarCaja && (
                                     <button onClick={()=>setView('escaner')} className={`pb-2 whitespace-nowrap ${view==='escaner'?'tab-active':''}`}>
@@ -1310,7 +1442,7 @@
 
                     <main className="p-4 max-w-7xl mx-auto w-full flex-1 mt-2">
                         {/* ===================================================================== */}
-                        {/* 1. ESCÁNER QR RÁFAGA Y TABLA MULTICAJERO EN VIVO (CAJEROS Y GERENTES) */}
+                        {/* 1. ESCÁNER QR RÁFAGA Y TABLA MULTICAJERO EN VIVO                      */}
                         {/* ===================================================================== */}
                         {view === 'escaner' && puedeOperarCaja && (
                             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 animate-fade-in no-print">
@@ -1348,12 +1480,23 @@
                                             </div>
                                         )}
 
-                                        <div className="bg-slate-900 rounded-2xl overflow-hidden relative min-h-[250px] flex flex-col items-center justify-center border-2 border-slate-800">
+                                        {/* Selector de Lente de Cámara si el celular tiene varias cámaras */}
+                                        {camerasList.length > 1 && (
+                                            <div className="mb-3 flex items-center gap-2">
+                                                <i className="fa-solid fa-camera-rotate text-slate-400 text-xs"></i>
+                                                <select value={selectedCamId} onChange={e => setSelectedCamId(e.target.value)} className="w-full p-2 bg-slate-100 border border-slate-200 rounded-xl text-[11px] font-bold text-slate-700">
+                                                    <option value="">Cámara Trasera Principal (Automática)</option>
+                                                    {camerasList.map(cam => <option key={cam.id} value={cam.id}>{cam.label || `Cámara ${cam.id}`}</option>)}
+                                                </select>
+                                            </div>
+                                        )}
+
+                                        <div className="bg-slate-900 rounded-2xl overflow-hidden relative min-h-[260px] flex flex-col items-center justify-center border-2 border-slate-800">
                                             <div id="qr-reader-box" className="w-full"></div>
                                             {!cameraActive && (
                                                 <div className="p-8 text-center">
                                                     <i className="fa-solid fa-camera text-4xl text-slate-500 mb-3"></i>
-                                                    <p className="text-xs text-slate-300 mb-4">Pasa las carpetas frente a la cámara de corrido sin tocar botones.</p>
+                                                    <p className="text-xs text-slate-300 mb-4">Enfoca los códigos QR de corrido sin tocar botones.</p>
                                                     <button onClick={() => setCameraActive(true)} className="bg-[#59B447] text-white font-black px-6 py-3 rounded-xl shadow-lg hover:bg-green-600 text-sm">
                                                         <i className="fa-solid fa-play mr-2"></i> Encender Cámara Ráfaga
                                                     </button>
@@ -1362,9 +1505,14 @@
                                         </div>
 
                                         {cameraActive && (
-                                            <button onClick={() => setCameraActive(false)} className="w-full mt-3 bg-red-50 text-red-600 font-bold py-2 rounded-xl border border-red-200 text-xs hover:bg-red-100">
-                                                <i className="fa-solid fa-stop mr-1"></i> Detener Cámara
-                                            </button>
+                                            <div className="flex gap-2 mt-3">
+                                                <button onClick={toggleLinterna} className={`flex-1 font-bold py-2 rounded-xl border text-xs ${torchOn ? 'bg-amber-400 text-slate-900 border-amber-500' : 'bg-slate-100 text-slate-700 border-slate-300'}`}>
+                                                    <i className="fa-solid fa-lightbulb mr-1"></i> {torchOn ? 'Apagar Flash' : 'Encender Flash'}
+                                                </button>
+                                                <button onClick={() => setCameraActive(false)} className="flex-1 bg-red-50 text-red-600 font-bold py-2 rounded-xl border border-red-200 text-xs hover:bg-red-100">
+                                                    <i className="fa-solid fa-stop mr-1"></i> Detener Cámara
+                                                </button>
+                                            </div>
                                         )}
 
                                         <form onSubmit={(e) => { e.preventDefault(); procesarLecturaQR(lectorFisicoInput); setLectorFisicoInput(''); }} className="mt-4 flex gap-2">
@@ -1471,7 +1619,7 @@
                         )}
 
                         {/* ===================================================================== */}
-                        {/* 2. PRESTAR / DEVOLVER MANUAL (SOLO CAJEROS Y GERENTES)                */}
+                        {/* 2. PRESTAR / DEVOLVER MANUAL                                          */}
                         {/* ===================================================================== */}
                         {view === 'movimientos' && puedeOperarCaja && (
                             <div className="max-w-2xl mx-auto animate-fade-in no-print">
@@ -1535,7 +1683,7 @@
                         )}
 
                         {/* ===================================================================== */}
-                        {/* 3. BUSCADOR Y FILTROS DE SEDE (ADMIN: SOLO LECTURA | GERENTE: EXPORTA)*/}
+                        {/* 3. BUSCADOR Y FILTROS DE SEDE                                         */}
                         {/* ===================================================================== */}
                         {view === 'dashboard' && (
                             <div className="animate-fade-in space-y-6 no-print">
@@ -1548,10 +1696,8 @@
                                     </div>
                                 )}
 
-                                {/* Panel de Búsqueda Directa y Filtros Combinados */}
                                 <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-3">
                                     <div className="flex flex-col lg:flex-row gap-3 items-center">
-                                        {/* Buscador directo por N° Expediente o Nombre */}
                                         <div className="relative flex-1 w-full">
                                             <i className="fa-solid fa-magnifying-glass absolute left-3.5 top-3 text-slate-400"></i>
                                             <input
@@ -1563,7 +1709,6 @@
                                             />
                                         </div>
 
-                                        {/* Botones de Exportación de Filtros: SOLO VISIBLES PARA GERENTES */}
                                         {puedeExportar && (
                                             <div className="flex gap-2 w-full lg:w-auto">
                                                 <button onClick={() => exportarCSV(true)} className="bg-emerald-600 text-white px-4 py-2.5 rounded-xl font-bold text-xs shadow hover:bg-emerald-700 flex-1 lg:flex-none flex items-center justify-center gap-1.5">
@@ -1682,7 +1827,7 @@
                         )}
 
                         {/* ===================================================================== */}
-                        {/* 4. REGISTRO DE EXPEDIENTES (CAJERO) Y EDICIÓN TOTAL (GERENTE)         */}
+                        {/* 4. REGISTRO DE EXPEDIENTES Y EDICIÓN TOTAL                            */}
                         {/* ===================================================================== */}
                         {view === 'inventario' && puedeOperarCaja && (
                             <div className="grid grid-cols-1 xl:grid-cols-4 gap-6 animate-fade-in no-print">
@@ -1818,10 +1963,11 @@
                         )}
 
                         {/* ===================================================================== */}
-                        {/* 5. GENERADOR MASIVO DE TICKETS QR FÍSICOS A4 (CAJEROS Y GERENTES)     */}
+                        {/* 5. GENERADOR MASIVO DE TICKETS QR + PANEL PERSONALIZADOR DE DISEÑO    */}
                         {/* ===================================================================== */}
                         {view === 'tickets' && puedeOperarCaja && (
                             <div className="animate-fade-in">
+                                {/* Carga de Tickets */}
                                 <div className="no-print grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
                                     <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
                                         <h3 className="font-bold text-slate-800 text-sm mb-2"><i className="fa-solid fa-database text-[#59B447] mr-1"></i> 1. Generar Cientos desde Base ({expedientes.length})</h3>
@@ -1853,42 +1999,235 @@
                                     </div>
                                 </div>
 
-                                <div className="no-print mb-4 flex flex-col md:flex-row justify-between items-start md:items-center bg-white p-4 rounded-xl shadow-sm border border-slate-200 gap-4">
-                                    <div><h2 className="text-xl font-bold text-slate-800"><i className="fa-solid fa-print text-[#59B447]"></i> Vista Previa (A4 - 4x6 con QR)</h2><p className="text-sm text-slate-500">Etiquetas en cola: <span className="font-bold text-blue-600">{ticketsQueue.length}</span></p></div>
-                                    <div className="flex gap-2 w-full md:w-auto">
-                                        <button onClick={() => { if(confirm("¿Vaciar todas las etiquetas en cola?")) setTicketsQueue([]); }} className="bg-red-50 text-red-600 px-4 py-2.5 rounded-lg font-bold hover:bg-red-100 flex-1 sm:flex-none text-sm">Vaciar Todo</button>
-                                        <button onClick={() => window.print()} className="bg-slate-800 text-white px-6 py-2.5 rounded-lg font-bold shadow-md hover:bg-slate-700 flex-1 sm:flex-none text-sm">Imprimir A4 Ahora</button>
+                                {/* PANEL INTERACTIVO DE PERSONALIZACIÓN DE IMPRESIÓN (TAMAÑO QR, POSICIÓN, LETRAS) */}
+                                <div className="no-print bg-white p-5 rounded-2xl shadow-sm border-2 border-[#59B447]/40 mb-4">
+                                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 border-b pb-2 gap-2">
+                                        <h3 className="font-black text-slate-800 text-sm uppercase">
+                                            <i className="fa-solid fa-sliders text-[#59B447] mr-1.5"></i>
+                                            Personalizar Diseño del Ticket, Tamaño de Letra y Ubicación del QR
+                                        </h3>
+                                        <button
+                                            onClick={() => setPrintConfig({ qrSize: 84, qrPosition: 'DERECHA', qrDataMode: 'COMPACTO', fontSizeCliente: 0, fontSizeCodigo: 26, ticketHeightMm: 40, showHeaderSede: true })}
+                                            className="text-[11px] bg-slate-100 text-slate-600 px-3 py-1 rounded-lg font-bold hover:bg-slate-200"
+                                        >
+                                            <i className="fa-solid fa-rotate-left mr-1"></i> Restaurar Diseño Óptimo
+                                        </button>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                                        {/* 1. Ubicación del QR */}
+                                        <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
+                                            <label className="block text-[10px] font-black text-slate-500 uppercase mb-1.5">1. Ubicación del Código QR</label>
+                                            <select
+                                                value={printConfig.qrPosition}
+                                                onChange={e => setPrintConfig({...printConfig, qrPosition: e.target.value})}
+                                                className="w-full p-2 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-800"
+                                            >
+                                                <option value="DERECHA">QR a la Derecha + Nombre a la Izquierda</option>
+                                                <option value="IZQUIERDA">QR a la Izquierda + Nombre a la Derecha</option>
+                                                <option value="ARRIBA">QR Centrado Arriba + Nombre Debajo</option>
+                                                <option value="GIGANTE">QR Gigante Central (Prioridad Escáner)</option>
+                                            </select>
+                                        </div>
+
+                                        {/* 2. Tamaño del QR */}
+                                        <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
+                                            <div className="flex justify-between text-[10px] font-black text-slate-500 uppercase mb-1.5">
+                                                <span>2. Tamaño del QR</span>
+                                                <span className="text-[#59B447] font-black">{printConfig.qrSize} px</span>
+                                            </div>
+                                            <input
+                                                type="range"
+                                                min="55"
+                                                max="115"
+                                                value={printConfig.qrSize}
+                                                onChange={e => setPrintConfig({...printConfig, qrSize: parseInt(e.target.value, 10)})}
+                                                className="w-full accent-[#59B447] cursor-pointer"
+                                            />
+                                            <div className="flex justify-between text-[9px] text-slate-400 font-bold mt-1">
+                                                <span>Mediano (55px)</span>
+                                                <span>Recomendado (84px)</span>
+                                                <span>Extra Grande (115px)</span>
+                                            </div>
+                                        </div>
+
+                                        {/* 3. Densidad / Contenido del QR */}
+                                        <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
+                                            <label className="block text-[10px] font-black text-slate-500 uppercase mb-1.5">3. Tipo de QR (Velocidad de Lectura)</label>
+                                            <select
+                                                value={printConfig.qrDataMode}
+                                                onChange={e => setPrintConfig({...printConfig, qrDataMode: e.target.value})}
+                                                className="w-full p-2 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-800"
+                                            >
+                                                <option value="COMPACTO">⚡ Rápido: Sede + Código (Cuadros Grandes)</option>
+                                                <option value="MINIMO">🚀 Ultra Rápido: Solo Código (Cuadros Gigantes)</option>
+                                                <option value="COMPLETO">📄 Completo: Sede + Código + Nombre</option>
+                                            </select>
+                                        </div>
+
+                                        {/* 4. Tamaño de Letra del Nombre del Cliente */}
+                                        <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
+                                            <div className="flex justify-between text-[10px] font-black text-slate-500 uppercase mb-1.5">
+                                                <span>4. Letra del Nombre del Cliente</span>
+                                                <span className="text-blue-600 font-black">{printConfig.fontSizeCliente === 0 ? 'Automático' : `${printConfig.fontSizeCliente} px`}</span>
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                <input
+                                                    type="range"
+                                                    min="0"
+                                                    max="22"
+                                                    step="1"
+                                                    value={printConfig.fontSizeCliente}
+                                                    onChange={e => setPrintConfig({...printConfig, fontSizeCliente: parseInt(e.target.value, 10)})}
+                                                    className="flex-1 accent-blue-600 cursor-pointer"
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setPrintConfig({...printConfig, fontSizeCliente: 0})}
+                                                    className="text-[10px] bg-blue-100 text-blue-700 px-2 py-1 rounded font-bold"
+                                                >
+                                                    Auto
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        {/* 5. Tamaño del N° de Expediente (Rojo) */}
+                                        <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
+                                            <div className="flex justify-between text-[10px] font-black text-slate-500 uppercase mb-1.5">
+                                                <span>5. Tamaño Código Rojo (001-XXXXX)</span>
+                                                <span className="text-red-600 font-black">{printConfig.fontSizeCodigo} px</span>
+                                            </div>
+                                            <input
+                                                type="range"
+                                                min="18"
+                                                max="36"
+                                                value={printConfig.fontSizeCodigo}
+                                                onChange={e => setPrintConfig({...printConfig, fontSizeCodigo: parseInt(e.target.value, 10)})}
+                                                className="w-full accent-red-600 cursor-pointer"
+                                            />
+                                        </div>
+
+                                        {/* 6. Altura de Celda y Barra de Sede */}
+                                        <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 flex flex-col justify-between">
+                                            <div className="flex justify-between items-center mb-2">
+                                                <span className="text-[10px] font-black text-slate-500 uppercase">6. Altura Celda: {printConfig.ticketHeightMm}mm</span>
+                                                <input
+                                                    type="number"
+                                                    min="35"
+                                                    max="50"
+                                                    value={printConfig.ticketHeightMm}
+                                                    onChange={e => setPrintConfig({...printConfig, ticketHeightMm: parseInt(e.target.value, 10) || 40})}
+                                                    className="w-16 p-1 border rounded text-center text-xs font-bold bg-white"
+                                                />
+                                            </div>
+                                            <label className="flex items-center gap-2 cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={printConfig.showHeaderSede}
+                                                    onChange={e => setPrintConfig({...printConfig, showHeaderSede: e.target.checked})}
+                                                    className="w-4 h-4 accent-[#59B447]"
+                                                />
+                                                <span className="text-[11px] font-bold text-slate-700">Mostrar barra superior con nombre de Sede</span>
+                                            </label>
+                                        </div>
                                     </div>
                                 </div>
 
+                                <div className="no-print mb-4 flex flex-col md:flex-row justify-between items-start md:items-center bg-white p-4 rounded-xl shadow-sm border border-slate-200 gap-4">
+                                    <div>
+                                        <h2 className="text-xl font-bold text-slate-800"><i className="fa-solid fa-print text-[#59B447]"></i> Vista Previa en Vivo (A4 - 4x6 = 24 Tickets por Hoja)</h2>
+                                        <p className="text-sm text-slate-500">Etiquetas en cola: <span className="font-bold text-blue-600">{ticketsQueue.length}</span></p>
+                                    </div>
+                                    <div className="flex gap-2 w-full md:w-auto">
+                                        <button onClick={() => { if(confirm("¿Vaciar todas las etiquetas en cola?")) setTicketsQueue([]); }} className="bg-red-50 text-red-600 px-4 py-2.5 rounded-lg font-bold hover:bg-red-100 flex-1 sm:flex-none text-sm">Vaciar Todo</button>
+                                        <button onClick={() => window.print()} className="bg-slate-800 text-white px-6 py-2.5 rounded-lg font-bold shadow-md hover:bg-slate-700 flex-1 sm:flex-none text-sm">Imprimir Hojas A4 Ahora</button>
+                                    </div>
+                                </div>
+
+                                {/* HOJAS A4 DE IMPRESIÓN */}
                                 <div className="print-container w-full flex flex-col items-center">
                                     {printPages.map((page, pageIdx) => (
                                         <div key={pageIdx} className="print-area bg-white mx-auto w-full mb-8" style={{ pageBreakAfter: pageIdx === printPages.length - 1 ? 'auto' : 'always' }}>
                                             <div className="grid grid-cols-4 w-full border-t-2 border-l-2 border-black">
                                                 {page.map((t, idx) => {
-                                                    if (t.isEmpty) return ( <div key={`empty-${idx}`} className="ticket-cell flex flex-col border-r-2 border-b-2 border-black bg-white box-border" style={{ height: '40mm' }}><div className="w-full bg-white border-b-2 border-black shrink-0" style={{ height: '4.5mm' }}></div><div className="flex-1 w-full bg-transparent"></div><div className="w-full bg-slate-50/30 border-t-2 border-black shrink-0" style={{ height: '14.5mm' }}></div></div> );
+                                                    const cellHeight = `${printConfig.ticketHeightMm}mm`;
+                                                    if (t.isEmpty) return (
+                                                        <div key={`empty-${idx}`} className="ticket-cell flex flex-col border-r-2 border-b-2 border-black bg-white box-border justify-between" style={{ height: cellHeight }}>
+                                                            {printConfig.showHeaderSede && <div className="w-full bg-white border-b-2 border-black shrink-0" style={{ height: '4.2mm' }}></div>}
+                                                            <div className="flex-1 w-full bg-transparent"></div>
+                                                            <div className="w-full bg-slate-50/30 border-t-2 border-black shrink-0" style={{ height: '12.5mm' }}></div>
+                                                        </div>
+                                                    );
+
                                                     const nombres = parseTicketName(t.cliente);
-                                                    const qrValue = `${t.sede || sedeActual}|${t.id}|${t.cliente}`;
+                                                    const qrValue = armarPayloadQR(t);
+                                                    const estiloTexto = obtenerEstiloNombreCliente(t.cliente);
+
                                                     return (
-                                                    <div key={idx} className="ticket-cell flex flex-col border-r-2 border-b-2 border-black bg-white box-border overflow-hidden justify-between" style={{ height: '40mm' }}>
-                                                        <div className="w-full bg-white border-b-2 border-black shrink-0 flex items-center justify-between px-1.5" style={{ height: '4.5mm' }}>
-                                                            <span className="text-[8px] font-black text-slate-700">{t.sede || sedeActual}</span>
-                                                            <span className="text-[8px] font-bold text-slate-400">CREDIBAN</span>
-                                                        </div>
-                                                        <div className="flex-1 w-full flex items-center justify-between px-1.5 py-0.5 overflow-hidden gap-1">
-                                                            <div className="flex-1 flex flex-col items-center justify-center overflow-hidden">
-                                                                <span className={`font-black text-black uppercase text-center w-full leading-[1.05] break-words whitespace-normal ${getTicketNameStyle(t.cliente)}`} style={{ fontFamily: 'Arial, sans-serif' }}>{nombres.part1}</span>
-                                                                {nombres.part2 && ( <span className={`font-extrabold text-black uppercase text-center w-full leading-[1.05] break-words whitespace-normal ${getTicketNameStyle(t.cliente)}`} style={{ fontFamily: 'Arial, sans-serif' }}>{nombres.part2}</span> )}
+                                                        <div key={idx} className="ticket-cell flex flex-col border-r-2 border-b-2 border-black bg-white box-border overflow-hidden justify-between" style={{ height: cellHeight }}>
+                                                            {/* Franja Superior Opcional de Sede */}
+                                                            {printConfig.showHeaderSede && (
+                                                                <div className="w-full bg-white border-b-2 border-black shrink-0 flex items-center justify-between px-1.5" style={{ height: '4.2mm' }}>
+                                                                    <span className="text-[8px] font-black text-black">{t.sede || sedeActual}</span>
+                                                                    <span className="text-[8px] font-bold text-slate-600">CREDIBAN</span>
+                                                                </div>
+                                                            )}
+
+                                                            {/* Cuerpo Central según la Ubicación del QR elegida */}
+                                                            {printConfig.qrPosition === 'DERECHA' && (
+                                                                <div className="flex-1 w-full flex items-center justify-between px-1 py-0.5 overflow-hidden gap-1">
+                                                                    <div className="flex-1 flex flex-col items-center justify-center overflow-hidden px-0.5">
+                                                                        <span className="font-black text-black uppercase text-center w-full break-words whitespace-normal" style={estiloTexto}>{nombres.part1}</span>
+                                                                        {nombres.part2 && <span className="font-extrabold text-black uppercase text-center w-full break-words whitespace-normal" style={estiloTexto}>{nombres.part2}</span>}
+                                                                    </div>
+                                                                    <div className="shrink-0 flex items-center justify-center bg-white">
+                                                                        <QRCodeCanvas value={qrValue} size={printConfig.qrSize} />
+                                                                    </div>
+                                                                </div>
+                                                            )}
+
+                                                            {printConfig.qrPosition === 'IZQUIERDA' && (
+                                                                <div className="flex-1 w-full flex items-center justify-between px-1 py-0.5 overflow-hidden gap-1">
+                                                                    <div className="shrink-0 flex items-center justify-center bg-white">
+                                                                        <QRCodeCanvas value={qrValue} size={printConfig.qrSize} />
+                                                                    </div>
+                                                                    <div className="flex-1 flex flex-col items-center justify-center overflow-hidden px-0.5">
+                                                                        <span className="font-black text-black uppercase text-center w-full break-words whitespace-normal" style={estiloTexto}>{nombres.part1}</span>
+                                                                        {nombres.part2 && <span className="font-extrabold text-black uppercase text-center w-full break-words whitespace-normal" style={estiloTexto}>{nombres.part2}</span>}
+                                                                    </div>
+                                                                </div>
+                                                            )}
+
+                                                            {printConfig.qrPosition === 'ARRIBA' && (
+                                                                <div className="flex-1 w-full flex flex-col items-center justify-center px-1 py-0.5 overflow-hidden">
+                                                                    <div className="shrink-0 flex items-center justify-center bg-white mb-0.5">
+                                                                        <QRCodeCanvas value={qrValue} size={Math.min(printConfig.qrSize, 74)} />
+                                                                    </div>
+                                                                    <span className="font-black text-black uppercase text-center w-full truncate" style={estiloTexto}>{t.cliente}</span>
+                                                                </div>
+                                                            )}
+
+                                                            {printConfig.qrPosition === 'GIGANTE' && (
+                                                                <div className="flex-1 w-full flex items-center justify-center p-0.5 overflow-hidden bg-white">
+                                                                    <QRCodeCanvas value={qrValue} size={printConfig.qrSize} />
+                                                                </div>
+                                                            )}
+
+                                                            {/* Franja Inferior con Código de Expediente en Rojo */}
+                                                            <div className="w-full flex flex-col items-center justify-center bg-white border-t-2 border-black shrink-0" style={{ height: '12.5mm' }}>
+                                                                <span
+                                                                    className="font-black text-red-600 tracking-tighter font-sans"
+                                                                    style={{ fontSize: `${printConfig.fontSizeCodigo}px`, lineHeight: '1', textShadow: '0px 0px 0px #dc2626' }}
+                                                                >
+                                                                    {t.id}
+                                                                </span>
+                                                                {printConfig.qrPosition === 'GIGANTE' && (
+                                                                    <span className="text-[8px] font-black text-black uppercase truncate max-w-[95%] leading-none mt-0.5">{t.cliente}</span>
+                                                                )}
                                                             </div>
-                                                            <div className="shrink-0 flex items-center justify-center p-0.5 bg-white">
-                                                                <QRCodeCanvas value={qrValue} size={54} />
-                                                            </div>
                                                         </div>
-                                                        <div className="w-full flex items-center justify-center bg-white border-t-2 border-black pb-0.5 shrink-0" style={{ height: '13.5mm' }}>
-                                                            <span className="font-black text-[26px] text-red-600 tracking-tighter font-sans" style={{ lineHeight: '1', textShadow: '0px 0px 0px #dc2626' }}>{t.id}</span>
-                                                        </div>
-                                                    </div>
-                                                )})}
+                                                    );
+                                                })}
                                             </div>
                                         </div>
                                     ))}
@@ -1928,7 +2267,6 @@
                                 </div>
 
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                                    {/* Lista de Asesores de la Sede */}
                                     <div className="glass-card p-5 rounded-2xl">
                                         <h4 className="font-bold text-slate-800 text-sm mb-3 border-b pb-2"><i className="fa-solid fa-user-tie text-[#59B447] mr-1"></i> Asesores ({sedeActual})</h4>
                                         <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
@@ -1941,7 +2279,6 @@
                                         </div>
                                     </div>
 
-                                    {/* Categorizaciones / Estados de Crédito */}
                                     <div className="glass-card p-5 rounded-2xl">
                                         <h4 className="font-bold text-slate-800 text-sm mb-3 border-b pb-2"><i className="fa-solid fa-tags text-blue-500 mr-1"></i> Categorías de Estado</h4>
                                         <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
@@ -1954,7 +2291,6 @@
                                         </div>
                                     </div>
 
-                                    {/* Filiales / Sedes Activas */}
                                     <div className="glass-card p-5 rounded-2xl">
                                         <h4 className="font-bold text-slate-800 text-sm mb-3 border-b pb-2"><i className="fa-solid fa-building text-purple-600 mr-1"></i> Filiales Activas</h4>
                                         <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
